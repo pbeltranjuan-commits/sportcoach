@@ -1,93 +1,73 @@
 import streamlit as st
-from openai import OpenAI
+from utils.auth import signup, login, logout, get_user_profile
+from utils.database import get_db
 
-# --- 1. CONFIGURACIÓ DE LA IA (AKI.IO) ---
-try:
-    client = OpenAI(
-        api_key=st.secrets["AKI_API_KEY"],
-        base_url=st.secrets["AKI_BASE_URL"]
-    )
-    MODEL_NAME = "qwen-turbo"
-    IA_OK = True
-except Exception as e:
-    st.error(f"❌ Error configurant la IA: {e}")
-    IA_OK = False
+st.set_page_config(page_title="SportCoach IA", page_icon="🏃", layout="wide")
 
-# --- 2. CONFIGURACIÓ DE SUPABASE (OPCIONAL) ---
-supabase = None
-DB_OK = False
-try:
-    from supabase import create_client, Client
-    url = st.secrets.get("SUPABASE_URL")
-    key = st.secrets.get("SUPABASE_KEY")
-    if url and key:
-        supabase: Client = create_client(url, key)
-        DB_OK = True
-except Exception as e:
-    st.warning(f"⚠️ Supabase no disponible: {e}")
-    DB_OK = False
+# Inicialitzar estat
+if 'user' not in st.session_state:
+    st.session_state.user = None
+if 'user_profile' not in st.session_state:
+    st.session_state.user_profile = None
 
-# --- 3. INTERFÍCIE ---
-st.title("🏋️‍♂️ El teu Assessor Fitness IA")
-st.caption("Pregunta'm sobre rutines, nutrició o tècnica d'exercicis.")
+# Si no hi ha usuari, mostrar login/registre
+if st.session_state.user is None:
+    st.title("🏃 SportCoach IA - El teu entrenador personal")
+    st.caption("Running & Trail Running amb Intel·ligència Artificial")
+    
+    tab1, tab2 = st.tabs(["🔑 Iniciar Sessió", "📝 Registrar-se"])
+    
+    with tab1:
+        st.subheader("Benvingut de nou")
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Contrasenya", type="password", key="login_password")
+        
+        if st.button("Entrar", type="primary"):
+            user, error = login(email, password)
+            if user:
+                st.session_state.user = user.user
+                st.session_state.user_profile = get_user_profile(user.user.id)
+                st.rerun()
+            else:
+                st.error(f"Error: {error}")
+    
+    with tab2:
+        st.subheader("Crea un compte nou")
+        new_email = st.text_input("Email", key="signup_email")
+        new_password = st.text_input("Contrasenya", type="password", key="signup_password")
+        new_name = st.text_input("Nom complet", key="signup_name")
+        
+        if st.button("Registrar-se", type="primary"):
+            user, error = signup(new_email, new_password, new_name)
+            if user:
+                st.success("✅ Registre completat! Revisa el teu email per confirmar-lo.")
+                st.info("📧 Un cop confirmis l'email, podràs iniciar sessió.")
+            else:
+                st.error(f"Error: {error}")
 
-if DB_OK:
-    st.success("✅ Base de dades connectada")
 else:
-    st.warning("⚠️ Mode sense base de dades (els missatges no es guardaran)")
-
-# --- 4. HISTORIAL DEL XAT ---
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "Hola! Sóc el teu entrenador personal. En què et puc ajudar avui?"}
-    ]
-
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# --- 5. LÒGICA DEL XAT ---
-if prompt := st.chat_input("Com puc millorar el meu press de banca?"):
+    # Usuari autenticat
+    st.sidebar.title(f"👤 {st.session_state.user_profile.get('full_name', 'Usuari')}")
+    st.sidebar.write(f"📧 {st.session_state.user.email}")
     
-    if not IA_OK:
-        st.error("❌ La IA no està configurada. Revisa els secrets.")
-        st.stop()
+    if st.sidebar.button("🚪 Tancar Sessió"):
+        logout()
+        st.rerun()
     
-    # Missatge usuari
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    st.sidebar.markdown("---")
+    st.sidebar.info("💡 Utilitza el menú lateral per navegar")
     
-    # Guardar a Supabase (si funciona)
-    if DB_OK and supabase:
-        try:
-            supabase.table("messages").insert({"role": "user", "content": prompt}).execute()
-        except:
-            pass  # No fem res si falla
+    # Pàgina principal
+    st.title(f"Benvingut, {st.session_state.user_profile.get('full_name', 'Corredor')}! 🏃")
+    st.markdown("### El teu entrenador personal IA et espera")
     
-    # Resposta de la IA
-    with st.chat_message("assistant"):
-        with st.spinner("Pensant..."):
-            try:
-                system_prompt = {"role": "system", "content": "Ets un assessor d'entrenament personal d'elit. Respon de forma concisa i tècnica en català."}
-                api_messages = [system_prompt] + st.session_state.messages
-                
-                response = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=api_messages,
-                    temperature=0.7
-                )
-                full_response = response.choices[0].message.content
-                st.markdown(full_response)
-                
-                # Guardar resposta a Supabase (si funciona)
-                if DB_OK and supabase:
-                    try:
-                        supabase.table("messages").insert({"role": "assistant", "content": full_response}).execute()
-                    except:
-                        pass
-                        
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
-                
-            except Exception as e:
-                st.error(f"❌ Error amb la IA: {e}")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Converses", "?")
+    with col2:
+        st.metric("Mètriques guardades", "?")
+    with col3:
+        st.metric("Dies entrenant", "?")
+    
+    st.markdown("---")
+    st.info("👈 Selecciona una opció al menú lateral per començar")
