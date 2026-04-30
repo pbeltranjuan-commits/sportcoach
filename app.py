@@ -1,14 +1,15 @@
 import streamlit as st
 from openai import OpenAI
 
-# 1. Configuració de l'API Qwen (compatible amb OpenAI)
+# 1. Configuració de l'API AKI.IO (compatible amb OpenAI)
 client = OpenAI(
-    api_key=st.secrets["QWEN_API_KEY"],
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key=st.secrets["AKI_API_KEY"],
+    base_url=st.secrets["AKI_BASE_URL"]
 )
-MODEL_NAME = "qwen-plus"  # Opcions: qwen-turbo, qwen-plus, qwen-max
 
-st.title("🏋️‍♂️ El teu Assessor Fitness IA")
+MODEL_NAME = "qwen-turbo"  # Model ràpid i econòmic
+
+st.title("🏋️♂️ El teu Assessor Fitness IA")
 st.caption("Pregunta'm sobre rutines, nutrició o tècnica d'exercicis.")
 
 # 2. Inicialitzar l'historial del xat
@@ -30,10 +31,10 @@ if prompt := st.chat_input("Com puc millorar el meu press de banca?"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 5. Resposta de Qwen
+    # 5. Resposta de la IA
     with st.chat_message("assistant"):
         with st.spinner("Pensant..."):
-            # Qwen utilitza el format estàndard de missatges
+            # System prompt per donar context
             system_prompt = {"role": "system", "content": "Ets un assessor d'entrenament personal d'elit. Respon de forma concisa i tècnica en català."}
             
             # Unim system prompt + historial
