@@ -1,6 +1,8 @@
 import streamlit as st
-from utils.auth import signup, login, logout, get_user_profile
-from utils.database import get_db
+from supabase import create_client, Client
+from openai import OpenAI
+from auth import signup, login, logout, get_user_profile
+from database import get_db
 
 st.set_page_config(page_title="SportCoach IA", page_icon="🏃", layout="wide")
 
@@ -47,7 +49,7 @@ if st.session_state.user is None:
 
 else:
     # Usuari autenticat
-    st.sidebar.title(f"👤 {st.session_state.user_profile.get('full_name', 'Usuari')}")
+    st.sidebar.title(f"👤 {st.session_state.user_profile.get('full_name', 'Usuari') if st.session_state.user_profile else 'Usuari'}")
     st.sidebar.write(f"📧 {st.session_state.user.email}")
     
     if st.sidebar.button("🚪 Tancar Sessió"):
@@ -58,16 +60,8 @@ else:
     st.sidebar.info("💡 Utilitza el menú lateral per navegar")
     
     # Pàgina principal
-    st.title(f"Benvingut, {st.session_state.user_profile.get('full_name', 'Corredor')}! 🏃")
+    st.title(f"Benvingut, {st.session_state.user_profile.get('full_name', 'Corredor') if st.session_state.user_profile else 'Corredor'}! 🏃")
     st.markdown("### El teu entrenador personal IA et espera")
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Converses", "?")
-    with col2:
-        st.metric("Mètriques guardades", "?")
-    with col3:
-        st.metric("Dies entrenant", "?")
-    
     st.markdown("---")
-    st.info("👈 Selecciona una opció al menú lateral per començar")
+    st.info("👈 Aviat tindras aquí el teu dashboard")
