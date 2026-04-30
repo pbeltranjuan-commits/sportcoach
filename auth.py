@@ -1,5 +1,5 @@
 import streamlit as st
-from utils.database import get_db
+from database import get_db
 
 def signup(email, password, full_name):
     supabase = get_db()
