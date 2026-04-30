@@ -1,2 +1,4 @@
-streamlit
-openai
+AKI_API_KEY = "la-teva-clau-aki"
+AKI_BASE_URL = "https://aki.io/v1"
+SUPABASE_URL = "https://xyzcompany.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIs..."  # La clau "anon" o "service_role"
