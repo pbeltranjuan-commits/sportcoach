@@ -4,3 +4,4 @@ supabase
 pandas
 plotly
 python-dateutil
+potly
