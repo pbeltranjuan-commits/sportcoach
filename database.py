@@ -1,4 +1,4 @@
-from supabase import create_client, Client
+from supabase import create_client
 import streamlit as st
 
 @st.cache_resource
