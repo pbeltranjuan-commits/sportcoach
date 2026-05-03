@@ -1,89 +1,55 @@
 import streamlit as st
-from database import get_db
+from supabase import create_client
 from openai import OpenAI
-from datetime import datetime
 
-def mostrar_xat():
-    if 'user' not in st.session_state or st.session_state.user is None:
-        st.warning("🔒 Has d'iniciar sessió")
-        return
+st.set_page_config(page_title="SportCoach", page_icon="🏃")
+
+@st.cache_resource
+def init():
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"]), OpenAI(api_key=st.secrets["AKI_API_KEY"], base_url=st.secrets["AKI_BASE_URL"])
+
+supabase, client = init()
+
+if 'user' not in st.session_state:
+    st.session_state.user = None
+
+if st.session_state.user is None:
+    st.title("🏃 SportCoach IA")
+    email = st.text_input("Email")
+    pwd = st.text_input("Password", type="password")
     
-    supabase = get_db()
-    client = OpenAI(api_key=st.secrets["AKI_API_KEY"], base_url=st.secrets["AKI_BASE_URL"])
-    user_id = st.session_state.user.id
-    
-    if 'conv_id' not in st.session_state:
-        st.session_state.conv_id = None
-    if 'msgs' not in st.session_state:
-        st.session_state.msgs = []
-    
-    def create_conv():
-        res = supabase.table("conversations").insert({
-            "user_id": user_id, 
-            "title": "Nova conversa", 
-            "updated_at": datetime.now().isoformat()
-        }).execute()
-        return res.data[0]['id']
-    
-    def save_msg(role, content):
-        supabase.table("messages").insert({
-            "conversation_id": st.session_state.conv_id, 
-            "role": role, 
-            "content": content
-        }).execute()
-    
-    def load_conv():
-        # ✅ SENSE asc=True - només el nom de la columna
-        res = supabase.table("messages").select("*").eq(
-            "conversation_id", st.session_state.conv_id
-        ).order("created_at").execute()
-        return [{"role": m["role"], "content": m["content"]} for m in res.data]
-    
-    def get_convs():
-        res = supabase.table("conversations").select("*").eq(
-            "user_id", user_id
-        ).order("updated_at").execute()
-        return res.data
-    
-    if st.session_state.conv_id is None:
-        st.session_state.conv_id = create_conv()
-        st.session_state.msgs = []
-    if not st.session_state.msgs:
-        st.session_state.msgs = load_conv()
-    
-    st.title("💬 Xat amb Entrenador IA")
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        convs = get_convs()
-        if convs:
-            opts = {c['title'] or f"Conv {i}": c['id'] for i, c in enumerate(convs)}
-            sel = st.selectbox("Carregar conversa:", list(opts.keys()))
-            if st.button("Carregar"):
-                st.session_state.conv_id = opts[sel]
-                st.session_state.msgs = []
-                st.rerun()
-    with col2:
-        if st.button("🆕 Nova"):
-            st.session_state.conv_id = create_conv()
-            st.session_state.msgs = []
+    if st.button("Entrar"):
+        try:
+            u = supabase.auth.sign_in_with_password({"email": email, "password": pwd})
+            st.session_state.user = u.user
             st.rerun()
+        except Exception as e:
+            st.error(e)
+else:
+    st.sidebar.write(f"👤 {st.session_state.user.email}")
+    if st.sidebar.button("Logout"):
+        supabase.auth.sign_out()
+        st.session_state.user = None
+        st.rerun()
     
-    for m in st.session_state.msgs:
-        with st.chat_message(m["role"]):
-            st.markdown(m["content"])
+    menu = st.sidebar.radio("Menu", ["Inici", "Xat"])
     
-    if prompt := st.chat_input("Pregunta..."):
-        st.session_state.msgs.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        save_msg("user", prompt)
+    if menu == "Inici":
+        st.title("Benvingut!")
+    elif menu == "Xat":
+        st.title("💬 Xat")
+        if "msgs" not in st.session_state:
+            st.session_state.msgs = []
         
-        with st.chat_message("assistant"):
-            with st.spinner("Pensant..."):
-                api_msgs = [{"role": "system", "content": "Ets un entrenador expert en running. Respon en català."}] + st.session_state.msgs
-                res = client.chat.completions.create(model="qwen-turbo", messages=api_msgs, temperature=0.7)
+        for m in st.session_state.msgs:
+            with st.chat_message(m["role"]):
+                st.write(m["content"])
+        
+        if prompt := st.chat_input("Pregunta..."):
+            st.session_state.msgs.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.write(prompt)
+            
+            with st.chat_message("assistant"):
+                res = client.chat.completions.create(model="qwen-turbo", messages=[{"role": "user", "content": prompt}])
                 ans = res.choices[0].message.content
-                st.markdown(ans)
-        save_msg("assistant", ans)
-        st.session_state.msgs.append({"role": "assistant", "content": ans})
