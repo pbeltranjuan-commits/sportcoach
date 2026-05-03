@@ -1,6 +1,4 @@
 import streamlit as st
-from supabase import create_client, Client
-from openai import OpenAI
 from auth import signup, login, logout, get_user_profile
 from database import get_db
 
@@ -49,7 +47,9 @@ if st.session_state.user is None:
 
 else:
     # Usuari autenticat
-    st.sidebar.title(f"👤 {st.session_state.user_profile.get('full_name', 'Usuari') if st.session_state.user_profile else 'Usuari'}")
+    user_name = st.session_state.user_profile.get('full_name', 'Corredor') if st.session_state.user_profile else st.session_state.user.email.split('@')[0]
+    
+    st.sidebar.title(f"👤 {user_name}")
     st.sidebar.write(f"📧 {st.session_state.user.email}")
     
     if st.sidebar.button("🚪 Tancar Sessió"):
@@ -57,11 +57,42 @@ else:
         st.rerun()
     
     st.sidebar.markdown("---")
-    st.sidebar.info("💡 Utilitza el menú lateral per navegar")
     
-    # Pàgina principal
-    st.title(f"Benvingut, {st.session_state.user_profile.get('full_name', 'Corredor') if st.session_state.user_profile else 'Corredor'}! 🏃")
-    st.markdown("### El teu entrenador personal IA et espera")
+    # Menu de navegació
+    menu = st.sidebar.radio(
+        "Navegació",
+        ["🏠 Inici", "💬 Xat IA", "💭 Sensacions"],
+        index=0
+    )
     
-    st.markdown("---")
-    st.info("👈 Aviat tindras aquí el teu dashboard")
+    # ==================== PÀGINA INICI ====================
+    if menu == "🏠 Inici":
+        st.title(f"Benvingut, {user_name}! 🏃")
+        st.markdown("### El teu entrenador personal IA")
+        st.info("Selecciona una opció al menú lateral per començar")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Converses", "0")
+        with col2:
+            st.metric("Mètriques guardades", "0")
+        with col3:
+            st.metric("Dies entrenant", "0")
+    
+    # ==================== PÀGINA XAT ====================
+    elif menu == "💬 Xat IA":
+        # Importar el mòdul de xat
+        try:
+            exec(open('xats.py').read())
+        except Exception as e:
+            st.error(f"Error carregant el xat: {e}")
+            st.info("El mòdul de xat estarà disponible aviat")
+    
+    # ==================== PÀGINA SENSACIONS ====================
+    elif menu == "💭 Sensacions":
+        # Importar el mòdul de sensacions
+        try:
+            exec(open('Sensacions.py').read())
+        except Exception as e:
+            st.error(f"Error carregant sensacions: {e}")
+            st.info("El mòdul de sensacions estarà disponible aviat")
