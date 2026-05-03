@@ -1,55 +1,93 @@
 import streamlit as st
-from supabase import create_client
-from openai import OpenAI
 
-st.set_page_config(page_title="SportCoach", page_icon="🏃")
+st.set_page_config(page_title="SportCoach IA", page_icon="🏃", layout="wide")
 
-@st.cache_resource
-def init():
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"]), OpenAI(api_key=st.secrets["AKI_API_KEY"], base_url=st.secrets["AKI_BASE_URL"])
-
-supabase, client = init()
+try:
+    from auth import signup, login, logout, get_user_profile
+    from database import get_db
+    import xats
+    import Sensacions
+except Exception as e:
+    st.error(f"❌ Error carregant mòduls: {e}")
+    st.stop()
 
 if 'user' not in st.session_state:
     st.session_state.user = None
+if 'user_profile' not in st.session_state:
+    st.session_state.user_profile = None
 
 if st.session_state.user is None:
     st.title("🏃 SportCoach IA")
-    email = st.text_input("Email")
-    pwd = st.text_input("Password", type="password")
+    st.caption("Running & Trail Running amb Intel·ligència Artificial")
     
-    if st.button("Entrar"):
-        try:
-            u = supabase.auth.sign_in_with_password({"email": email, "password": pwd})
-            st.session_state.user = u.user
-            st.rerun()
-        except Exception as e:
-            st.error(e)
+    tab1, tab2 = st.tabs(["🔑 Iniciar Sessió", "📝 Registrar-se"])
+    
+    with tab1:
+        st.subheader("Benvingut de nou")
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Contrasenya", type="password", key="login_password")
+        
+        if st.button("Entrar", type="primary"):
+            user, error = login(email, password)
+            if user:
+                st.session_state.user = user.user
+                st.session_state.user_profile = get_user_profile(user.user.id)
+                st.success("✅ Sessió iniciada!")
+                st.rerun()
+            else:
+                st.error(f"Error: {error}")
+    
+    with tab2:
+        st.subheader("Crea un compte nou")
+        new_email = st.text_input("Email", key="signup_email")
+        new_password = st.text_input("Contrasenya", type="password", key="signup_password")
+        new_name = st.text_input("Nom complet", key="signup_name")
+        
+        if st.button("Registrar-se", type="primary"):
+            user, error = signup(new_email, new_password, new_name)
+            if user:
+                st.success("✅ Registre completat! Ara pots iniciar sessió.")
+                st.info("📧 Si no et deixa entrar, confirma el correu a Supabase.")
+            else:
+                st.error(f"Error: {error}")
+
 else:
-    st.sidebar.write(f"👤 {st.session_state.user.email}")
-    if st.sidebar.button("Logout"):
-        supabase.auth.sign_out()
+    user_name = st.session_state.user_profile.get('full_name', 'Corredor') if st.session_state.user_profile else st.session_state.user.email.split('@')[0]
+    
+    st.sidebar.title(f"👤 {user_name}")
+    st.sidebar.write(f"📧 {st.session_state.user.email}")
+    
+    if st.sidebar.button("🚪 Tancar Sessió"):
+        logout()
         st.session_state.user = None
+        st.session_state.user_profile = None
         st.rerun()
     
-    menu = st.sidebar.radio("Menu", ["Inici", "Xat"])
+    st.sidebar.markdown("---")
     
-    if menu == "Inici":
-        st.title("Benvingut!")
-    elif menu == "Xat":
-        st.title("💬 Xat")
-        if "msgs" not in st.session_state:
-            st.session_state.msgs = []
-        
-        for m in st.session_state.msgs:
-            with st.chat_message(m["role"]):
-                st.write(m["content"])
-        
-        if prompt := st.chat_input("Pregunta..."):
-            st.session_state.msgs.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.write(prompt)
-            
-            with st.chat_message("assistant"):
-                res = client.chat.completions.create(model="qwen-turbo", messages=[{"role": "user", "content": prompt}])
-                ans = res.choices[0].message.content
+    menu = st.sidebar.radio(
+        "Navegació",
+        ["🏠 Inici", "💬 Xat IA", "💭 Sensacions"],
+        index=0
+    )
+    
+    if menu == "🏠 Inici":
+        st.title(f"Benvingut, {user_name}! 🏃")
+        st.markdown("### El teu entrenador personal IA")
+        st.info("Selecciona una opció al menú lateral")
+    
+    elif menu == "💬 Xat IA":
+        try:
+            xats.mostrar_xat()
+        except Exception as e:
+            st.error(f"❌ Error al xat: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+    
+    elif menu == "💭 Sensacions":
+        try:
+            Sensacions.mostrar_sensacions()
+        except Exception as e:
+            st.error(f"❌ Error a sensacions: {e}")
+            import traceback
+            st
