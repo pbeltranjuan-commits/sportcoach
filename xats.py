@@ -2,9 +2,10 @@ import streamlit as st
 from database import get_db
 from openai import OpenAI
 from datetime import datetime
-import base64
+import uuid
 
 def mostrar_xat():
+    # 1. Verificació de seguretat
     if 'user' not in st.session_state or st.session_state.user is None:
         st.warning("🔒 Has d'iniciar sessió")
         return
@@ -13,10 +14,13 @@ def mostrar_xat():
     client = OpenAI(api_key=st.secrets["AKI_API_KEY"], base_url=st.secrets["AKI_BASE_URL"])
     user_id = st.session_state.user.id
     
+    # Inicialització de variables
     if 'conv_id' not in st.session_state:
         st.session_state.conv_id = None
     if 'msgs' not in st.session_state:
         st.session_state.msgs = []
+
+    # --- FUNCIONS DE BASE DE DADES ---
     
     def create_conv():
         try:
@@ -29,160 +33,122 @@ def mostrar_xat():
         except Exception as e:
             st.error(f"Error creant conversa: {e}")
             return None
-    
-    def upload_image(file):
-        """Puja imatge a Supabase Storage"""
+
+    def load_conv(conversation_id):
+        """Carrega missatges i els retorna"""
         try:
-            # Nom únic per la imatge
-            import uuid
-            file_extension = file.name.split('.')[-1]
-            file_name = f"{user_id}/{st.session_state.conv_id}/{uuid.uuid4()}.{file_extension}"
+            res = supabase.table("messages")\
+                .select("*")\
+                .eq("conversation_id", conversation_id)\
+                .order("created_at")\
+                .execute()
             
-            # Puja a Supabase Storage
-            supabase.storage.from_("chat-images").upload(
-                file_name, 
-                file.getvalue(),
-                {"content-type": file.type}
-            )
-            
-            # Obté URL pública
-            public_url = supabase.storage.from_("chat-images").get_public_url(file_name)
-            return public_url
+            # DEBUG: Mostra si ha trobat res
+            st.caption(f"📦 Carregats {len(res.data)} missatges de la BD.")
+            return res.data
         except Exception as e:
-            st.error(f"Error pujant imatge: {e}")
-            return None
-    
+            st.error(f"Error carregant missatges: {e}")
+            return []
+
     def save_msg(role, content, image_url=None):
         try:
             data = {
                 "conversation_id": st.session_state.conv_id, 
                 "role": role, 
                 "content": content,
-                "image_url": image_url,
-                "has_image": image_url is not None
+                "image_url": image_url
             }
             supabase.table("messages").insert(data).execute()
         except Exception as e:
-            st.error(f"Error guardant missatge: {e}")
-    
-    def load_conv():
-        try:
-            res = supabase.table("messages").select("*").eq(
-                "conversation_id", st.session_state.conv_id
-            ).order("created_at").execute()
-            return res.data
-        except Exception as e:
-            st.error(f"Error carregant: {e}")
-            return []
-    
+            st.error(f"Error guardant: {e}")
+
     def get_convs():
         try:
-            res = supabase.table("conversations").select("*").eq(
-                "user_id", user_id
-            ).order("updated_at").execute()
-            return res.data
-        except Exception as e:
-            st.error(f"Error llistant converses: {e}")
+            return supabase.table("conversations").select("*").eq("user_id", user_id).order("updated_at").execute().data
+        except:
             return []
+
+    # --- Lògica d'Inicialització ---
     
-    # Inicialitzar
+    # Si no hi ha conversa, en crea una
     if st.session_state.conv_id is None:
         st.session_state.conv_id = create_conv()
-        st.session_state.msgs = []
-    
+        st.session_state.msgs = [] # Buidem la memòria temporal
+
+    # Si la memòria temporal és buida, carrega de la BD
+    # AIXÒ ÉS CLAU: Carrega l'historial cada vegada que entra
     if not st.session_state.msgs and st.session_state.conv_id:
-        st.session_state.msgs = load_conv()
+        st.session_state.msgs = load_conv(st.session_state.conv_id)
+
+    # --- INTERFÍCIE ---
     
     st.title("💬 Xat amb Entrenador IA")
-    st.caption("Pots adjuntar fotos de la teva tècnica, lesions, etc.")
     
-    # Selector de converses
+    # Selector de Converses
     convs = get_convs()
     if convs:
         col1, col2 = st.columns([3, 1])
         with col1:
             opts = {c['title'] or f"Conv {i+1}": c['id'] for i, c in enumerate(convs)}
-            sel = st.selectbox("Carregar conversa:", list(opts.keys()))
-            if st.button("Carregar"):
+            sel = st.selectbox("Selecciona conversa:", list(opts.keys()))
+            if st.button("Carregar seleccionada"):
                 st.session_state.conv_id = opts[sel]
-                st.session_state.msgs = []
+                st.session_state.msgs = [] # Neteja per forçar recàrrega
                 st.rerun()
         with col2:
-            if st.button("🆕 Nova"):
+            if st.button("🆕 Nova conversa"):
                 st.session_state.conv_id = create_conv()
                 st.session_state.msgs = []
                 st.rerun()
-    
-    # Input amb imatge
-    st.markdown("---")
-    col1, col2 = st.columns([4, 1])
-    
-    with col1:
-        prompt = st.chat_input("Pregunta sobre running...")
-    
-    with col2:
-        uploaded_file = st.file_uploader("", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
-    
-    # Mostrar missatges
+
+    # Renderitzat del Xat
     for m in st.session_state.msgs:
         with st.chat_message(m["role"]):
-            if m.get("has_image") and m.get("image_url"):
+            if m.get("image_url"):
                 st.image(m["image_url"], width=300)
-            if m.get("content"):
-                st.markdown(m["content"])
+            st.markdown(m["content"])
+
+    # Input
+    prompt = st.chat_input("Pregunta sobre running...")
     
-    # Processar missatge
+    # Si l'usuari escriu:
     if prompt:
-        image_url = None
+        # 1. Mostrar missatge usuari
+        user_msg = {"role": "user", "content": prompt}
+        st.session_state.msgs.append(user_msg)
+        with st.chat_message("user"):
+            st.markdown(prompt)
         
-        # Si hi ha imatge, pujar-la
-        if uploaded_file:
-            with st.spinner("Pujant imatge..."):
-                image_url = upload_image(uploaded_file)
-                if image_url:
-                    st.image(uploaded_file, width=300)
-        
-        # Guardar missatge usuari
-        st.session_state.msgs.append({
-            "role": "user", 
-            "content": prompt,
-            "has_image": image_url is not None,
-            "image_url": image_url
-        })
-        
+        # 2. Guardar a BD
         if st.session_state.conv_id:
-            save_msg("user", prompt, image_url)
-        
-        # Resposta IA
+            save_msg("user", prompt)
+
+        # 3. Preparar context per a la IA (AIXÒ ÉS EL QUE FALLAVA)
+        # Creem una llista NOMÉS amb rols vàlids (user/assistant)
+        history_for_ai = []
+        for msg in st.session_state.msgs:
+            # Només agafem text i rol
+            if msg["role"] in ["user", "assistant"]:
+                history_for_ai.append({"role": msg["role"], "content": msg["content"]})
+
+        # 4. Crida a la IA
         with st.chat_message("assistant"):
             with st.spinner("Pensant..."):
-                # Preparar missatges per a la IA
-                api_msgs = [{"role": "system", "content": "Ets un entrenador expert en running i trail running. Respon en català. Si l'usuari adjunta una foto, analitza-la i dona consells sobre tècnica, postura o equipament."}]
-                
-                # Afegir historial (només text)
-                for m in st.session_state.msgs:
-                    if m.get("content"):
-                        api_msgs.append({"role": m["role"], "content": m["content"]})
-                
-                # Si hi ha imatge, afegir context
-                if image_url:
-                    api_msgs.append({
-                        "role": "user", 
-                        "content": f"{prompt} [IMATGE ADJUNTA: L'usuari ha compartit una foto]"
-                    })
-                else:
-                    api_msgs.append({"role": "user", "content": prompt})
-                
-                res = client.chat.completions.create(
-                    model="qwen-turbo", 
-                    messages=api_msgs, 
-                    temperature=0.7
-                )
-                ans = res.choices[0].message.content
-                st.markdown(ans)
-        
-        # Guardar resposta
-        if st.session_state.conv_id:
-            save_msg("assistant", ans, None)
-        
-        st.session_state.msgs.append({"role": "assistant", "content": ans, "has_image": False, "image_url": None})
+                try:
+                    system_msg = {"role": "system", "content": "Ets un entrenador expert en running i trail running. Recorda tot el que s'ha dit abans en aquesta conversa. Respon en català."}
+                    
+                    # Envia: System + Història Completa
+                    response = client.chat.completions.create(
+                        model="qwen-turbo",
+                        messages=[system_msg] + history_for_ai
+                    )
+                    ans = response.choices[0].message.content
+                    
+                    # 5. Mostrar i guardar resposta
+                    st.markdown(ans)
+                    st.session_state.msgs.append({"role": "assistant", "content": ans})
+                    if st.session_state.conv_id:
+                        save_msg("assistant", ans)
+                        
+                except Exception as e:
+                    st.error(f"Error IA: {e}")
