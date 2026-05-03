@@ -4,7 +4,6 @@ from openai import OpenAI
 from datetime import datetime
 
 def mostrar_xat():
-    """Funció principal del mòdul de xat"""
     if 'user' not in st.session_state or st.session_state.user is None:
         st.warning("🔒 Has d'iniciar sessió")
         return
@@ -32,23 +31,20 @@ def mostrar_xat():
             "role": role, 
             "content": content
         }).execute()
-        supabase.table("conversations").update({
-            "updated_at": datetime.now().isoformat()
-        }).eq("id", st.session_state.conv_id).execute()
     
     def load_conv():
+        # ✅ SENSE asc=True
         res = supabase.table("messages").select("*").eq(
             "conversation_id", st.session_state.conv_id
-        ).order("created_at", asc=True).execute()
+        ).order("created_at").execute()
         return [{"role": m["role"], "content": m["content"]} for m in res.data]
     
     def get_convs():
         res = supabase.table("conversations").select("*").eq(
             "user_id", user_id
-        ).order("updated_at", desc=True).limit(10).execute()
+        ).order("updated_at").execute()
         return res.data
     
-    # Inicialitzar
     if st.session_state.conv_id is None:
         st.session_state.conv_id = create_conv()
         st.session_state.msgs = []
@@ -57,7 +53,6 @@ def mostrar_xat():
     
     st.title("💬 Xat amb Entrenador IA")
     
-    # Selector
     col1, col2 = st.columns([3, 1])
     with col1:
         convs = get_convs()
@@ -74,7 +69,6 @@ def mostrar_xat():
             st.session_state.msgs = []
             st.rerun()
     
-    # Xat
     for m in st.session_state.msgs:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
