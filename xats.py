@@ -4,136 +4,264 @@ from openai import OpenAI
 from datetime import datetime
 import uuid
 
+
 def mostrar_xat():
     if 'user' not in st.session_state or st.session_state.user is None:
         st.warning("🔒 Has d'iniciar sessió")
         return
-    
+
     supabase = get_db()
     client = OpenAI(api_key=st.secrets["AKI_API_KEY"], base_url=st.secrets["AKI_BASE_URL"])
     user_id = st.session_state.user.id
-    
-    if 'conv_id' not in st.session_state: st.session_state.conv_id = None
-    if 'msgs' not in st.session_state: st.session_state.msgs = []
 
-    # --- GUARDAR MEMÒRIA (SENSE VECTORS) ---
+    if 'conv_id' not in st.session_state:
+        st.session_state.conv_id = None
+    if 'msgs' not in st.session_state:
+        st.session_state.msgs = []
+
+    # --- GUARDAR MEMÒRIA (amb data) ---
     def save_memory(content_text):
         try:
-            # Guarda directament sense vector
-            res = supabase.table("long_term_memories").insert({
+            dated_content = f"[{datetime.now().strftime('%Y-%m-%d')}] {content_text}"
+            emb_res = client.embeddings.create(input=dated_content, model="text-embedding-3-small")
+            emb = emb_res.data[0].embedding
+            supabase.table("long_term_memories").insert({
                 "user_id": user_id,
-                "content": content_text,
-                "embedding": None  # Null per ara
+                "content": dated_content,
+                "embedding": emb
             }).execute()
-            st.success(f"✅ Record guardat: {content_text[:50]}...")
             return True
         except Exception as e:
-            st.error(f"❌ ERROR: {str(e)}")
+            st.error(f"❌ ERROR GUARDANT MEMÒRIA: {str(e)}")
             return False
 
-    # --- CERCA PER TEXT SIMPLE (ILIKE) ---
-    def search_memories(query_text, limit=5):
+    # --- EXTRACCIÓ INTEL·LIGENT: només guarda fets rellevants ---
+    def extract_and_save_memories(user_message, assistant_response):
         try:
-            # Cerca paraules clau al contingut
-            words = query_text.lower().split()
-            results = []
-            
-            for word in words:
-                if len(word) > 3:  # Només paraules amb sentit
-                    res = supabase.table("long_term_memories")\
-                        .select("*")\
-                        .eq("user_id", user_id)\
-                        .ilike("content", f"%{word}%")\
-                        .limit(limit)\
-                        .execute()
-                    if res.data:
-                        results.extend(res.data)
-            
-            # Eliminar duplicats
-            unique = {r['id']: r for r in results}.values()
-            
-            if unique:
-                st.info(f"🔍 Trobats {len(unique)} records")
-                return list(unique)
-            else:
-                st.warning("⚠️ Cap record trobat")
-                return []
+            extraction = client.chat.completions.create(
+                model="qwen-turbo",
+                messages=[{
+                    "role": "user",
+                    "content": f"""Analitza aquesta conversa i extreu NOMÉS fets rellevants sobre l'usuari
+(estat físic, lesions, cansament, objectius, hàbits de running, emocions importants, edat, pes, característiques personals).
+Si no hi ha res rellevant, respon exactament: CAP
+
+Usuari: {user_message}
+Assistent: {assistant_response}
+
+Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
+                }],
+                temperature=0,
+                max_tokens=200
+            )
+            facts_text = extraction.choices[0].message.content.strip()
+            if facts_text.upper() != "CAP":
+                for fact in facts_text.split("\n"):
+                    fact = fact.strip("- ").strip()
+                    if fact:
+                        save_memory(fact)
         except Exception as e:
-            st.error(f"❌ ERROR CERCA: {str(e)}")
+            st.error(f"❌ Error extracció memòria: {str(e)}")
+
+    # --- PARAULES CLAU PER FORÇAR CERCA PERSONAL ---
+    PERSONAL_KEYWORDS = [
+        "vell", "jove", "edat", "anys", "quants anys", "qui soc", "com estic",
+        "lesió", "lesions", "menisc", "dolor", "cabell", "pes", "alçada",
+        "objectiu", "hàbit", "cansament", "cansat", "fatigat",
+        "viejo", "joven", "edad", "años", "quién soy", "cómo estoy",
+        "lesión", "pelo", "peso", "altura", "objetivo", "cansado"
+    ]
+
+    # --- CERCA RAG AMB QUERY EXPANSION + FIXES SEMÀNTICS ---
+    def get_relevant_memories(query_text, limit=5):
+        try:
+            query_lower = query_text.lower()
+
+            # Fix 3: si la pregunta és sobre l'usuari, forçar cerca personal
+            is_personal = any(kw in query_lower for kw in PERSONAL_KEYWORDS)
+
+            if is_personal:
+                search_query = "edat anys lesions estat físic característiques personals objectius de l'usuari"
+            else:
+                # Fix 2: query expansion millorada
+                expanded = client.chat.completions.create(
+                    model="qwen-turbo",
+                    messages=[{
+                        "role": "user",
+                        "content": f"""Ets un assistent que busca informació personal d'un usuari en una base de dades de memòries.
+Reformula la pregunta per trobar dades com: edat, lesions, estat físic, objectius, hàbits, emocions.
+Pregunta: {query_text}
+Escriu només la reformulació en català, sense explicacions. Exemple: 'edat anys informació personal de l'usuari'"""
+                    }],
+                    temperature=0,
+                    max_tokens=80
+                )
+                search_query = expanded.choices[0].message.content.strip()
+
+            query_emb = client.embeddings.create(
+                input=search_query,
+                model="text-embedding-3-small"
+            ).data[0].embedding
+
+            # Fix 1: threshold més baix per millor recall
+            res = supabase.rpc("match_memories", {
+                "query_embedding": query_emb,
+                "match_threshold": 0.3,
+                "match_count": limit,
+                "p_user_id": user_id
+            }).execute()
+
+            if res.data:
+                return [row["content"] for row in res.data]
+            return []
+        except Exception as e:
+            st.error(f"❌ ERROR CERCA RAG: {str(e)}")
             return []
 
-    # --- INICIALITZACIÓ ---
+    # --- INICIALITZACIÓ CONVERSA ---
     if st.session_state.conv_id is None:
         res = supabase.table("conversations").insert({
-            "user_id": user_id, "title": "Nova conversa", "updated_at": datetime.now().isoformat()
+            "user_id": user_id,
+            "title": "Nova conversa",
+            "updated_at": datetime.now().isoformat()
         }).execute()
         st.session_state.conv_id = res.data[0]['id']
         st.session_state.msgs = []
-    
+
     if not st.session_state.msgs:
-        st.session_state.msgs = supabase.table("messages").select("*").eq("conversation_id", st.session_state.conv_id).order("created_at").execute().data
+        st.session_state.msgs = (
+            supabase.table("messages")
+            .select("*")
+            .eq("conversation_id", st.session_state.conv_id)
+            .order("created_at")
+            .execute()
+            .data
+        )
 
     # --- INTERFÍCIE ---
-    st.title("💬 Xat IA (Memòria Text)")
-    
-    convs = supabase.table("conversations").select("*").eq("user_id", user_id).order("updated_at", desc=True).limit(10).execute().data
+    st.title("💬 Xat IA - Entrenador de Running")
+    st.caption("Memòria intel·ligent activa: recordo el teu historial")
+
+    # Selector de converses
+    convs = (
+        supabase.table("conversations")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("updated_at", desc=True)
+        .limit(10)
+        .execute()
+        .data
+    )
     if convs:
         col1, col2 = st.columns([3, 1])
         with col1:
             opts = {c['title'] or f"Conv {i+1}": c['id'] for i, c in enumerate(convs)}
             sel = st.selectbox("Carregar:", list(opts.keys()))
-            if st.button("Carregar"): st.session_state.conv_id = opts[sel]; st.session_state.msgs = []; st.rerun()
+            if st.button("Carregar"):
+                st.session_state.conv_id = opts[sel]
+                st.session_state.msgs = []
+                st.rerun()
         with col2:
-            if st.button("🆕 Nova"): 
-                res = supabase.table("conversations").insert({"user_id": user_id, "title": "Nova", "updated_at": datetime.now().isoformat()}).execute()
-                st.session_state.conv_id = res.data[0]['id']; st.session_state.msgs = []; st.rerun()
+            if st.button("🆕 Nova"):
+                res = supabase.table("conversations").insert({
+                    "user_id": user_id,
+                    "title": "Nova",
+                    "updated_at": datetime.now().isoformat()
+                }).execute()
+                st.session_state.conv_id = res.data[0]['id']
+                st.session_state.msgs = []
+                st.rerun()
 
     st.markdown("---")
-    
-    # Botó de prova
-    if st.button("🧪 PROVAR MEMÒRIA"):
-        save_memory("Tinc 30 anys")
-        save_memory("El meu cabell és roig")
-        save_memory("Vaig trencar el menisc fa un any")
 
+    # Botó de prova manual
+    if st.button("🧪 PROVAR MEMÒRIA MANUALMENT"):
+        test_facts = ["Tinc 30 anys", "El meu cabell és roig", "Vaig trencar el menisc fa un any"]
+        for f in test_facts:
+            save_memory(f)
+        st.info("Memòries de prova guardades! Pregunta 'Soc vell?' o 'Quants anys tinc?' per verificar.")
+
+    # Input i uploader
     col1, col2 = st.columns([4, 1])
-    with col1: prompt = st.chat_input("Pregunta...")
-    with col2: uploaded_file = st.file_uploader("", type=["jpg", "png"], label_visibility="collapsed")
+    with col1:
+        prompt = st.chat_input("Pregunta...")
+    with col2:
+        uploaded_file = st.file_uploader("", type=["jpg", "png"], label_visibility="collapsed")
 
+    # Mostrar historial
     for m in st.session_state.msgs:
         with st.chat_message(m["role"]):
-            if m.get("image_url"): st.image(m["image_url"], width=300)
+            if m.get("image_url"):
+                st.image(m["image_url"], width=300)
             st.markdown(m["content"])
 
+    # Processament del missatge
     if prompt:
         image_url = None
         if uploaded_file:
-            with st.spinner("Pujant..."):
+            with st.spinner("Pujant imatge..."):
                 ext = uploaded_file.name.split('.')[-1]
                 fn = f"{user_id}/{st.session_state.conv_id}/{uuid.uuid4()}.{ext}"
                 supabase.storage.from_("chat-images").upload(fn, uploaded_file.getvalue())
                 image_url = supabase.storage.from_("chat-images").get_public_url(fn)
-        
+
+        # Guardar missatge usuari
         st.session_state.msgs.append({"role": "user", "content": prompt, "image_url": image_url})
-        supabase.table("messages").insert({"conversation_id": st.session_state.conv_id, "role": "user", "content": prompt, "image_url": image_url}).execute()
-        
-        # Guardar com a record
-        save_memory(prompt)
-        
+        supabase.table("messages").insert({
+            "conversation_id": st.session_state.conv_id,
+            "role": "user",
+            "content": prompt,
+            "image_url": image_url
+        }).execute()
+
         with st.chat_message("assistant"):
-            with st.spinner("Pensant..."):
-                memories = search_memories(prompt, limit=5)
-                
-                context = "MEMÒRIA:\n" + "\n".join([f"- {m['content']}" for m in memories]) if memories else "Cap memòria."
-                
-                sys_msg = {"role": "system", "content": f"Ets un entrenador de running. {context} Respon en català."}
-                history = [sys_msg] + st.session_state.msgs[-8:]
-                
+            with st.spinner("Consultant memòria i pensant..."):
+                # 1. Buscar memòries rellevants
+                memories = get_relevant_memories(prompt, limit=5)
+
+                # 2. Construir context
+                if memories:
+                    context = "HISTORIAL DE L'USUARI (amb dates):\n" + "\n".join([f"- {m}" for m in memories])
+                else:
+                    context = "No hi ha historial previ de l'usuari."
+
+                # 3. Cridar la IA
+                sys_msg = {
+                    "role": "system",
+                    "content": (
+                        "Ets un entrenador de running personal. "
+                        f"Tens accés a l'historial de l'usuari:\n\n{context}\n\n"
+                        "Utilitza aquest historial per personalitzar les respostes. "
+                        "Si hi ha dates, raona temporalment (p.ex. 'fa 3 mesos deies que...'). "
+                        "Si l'historial conté dades rellevants per a la pregunta, utilitza-les SEMPRE. "
+                        "Respon sempre en català."
+                    )
+                }
+                history = [sys_msg] + [
+                    {"role": m["role"], "content": m["content"]}
+                    for m in st.session_state.msgs[-8:]
+                ]
+
                 try:
-                    res = client.chat.completions.create(model="qwen-turbo", messages=history, temperature=0.7)
+                    res = client.chat.completions.create(
+                        model="qwen-turbo",
+                        messages=history,
+                        temperature=0.7
+                    )
                     ans = res.choices[0].message.content
+
                     st.markdown(ans)
+
+                    # Guardar resposta
                     st.session_state.msgs.append({"role": "assistant", "content": ans, "image_url": None})
-                    supabase.table("messages").insert({"conversation_id": st.session_state.conv_id, "role": "assistant", "content": ans}).execute()
+                    supabase.table("messages").insert({
+                        "conversation_id": st.session_state.conv_id,
+                        "role": "assistant",
+                        "content": ans
+                    }).execute()
+
+                    # 4. Extracció intel·ligent (només fets rellevants)
+                    extract_and_save_memories(prompt, ans)
+
                 except Exception as e:
                     st.error(f"❌ ERROR IA: {str(e)}")
