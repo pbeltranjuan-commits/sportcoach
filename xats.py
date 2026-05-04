@@ -20,17 +20,15 @@ def get_embedding(text):
 
 # --- OCR PER LLEGIR IMATGES ---
 def extract_text_from_image(image_file):
-    """Extreu text d'una imatge amb OCR (tesseract)"""
     try:
         import pytesseract
         img = Image.open(image_file)
         text = pytesseract.image_to_string(img, lang='cat+spa+eng')
         return text.strip() if text.strip() else "Imatge sense text detectable"
     except ImportError:
-        return "⚠️ pytesseract no instal·lat. Afegeix-lo a requirements.txt"
+        return "️ pytesseract no instal·lat"
     except Exception as e:
         return f"Error llegint imatge: {str(e)}"
-
 
 def mostrar_xat():
     if 'user' not in st.session_state or st.session_state.user is None:
@@ -60,11 +58,43 @@ def mostrar_xat():
             st.error(f"❌ ERROR GUARDANT MEMÒRIA: {str(e)}")
             return False
 
+    # =====================================================
+    # 🔑 NOU: CARREGAR HISTORIAL GLOBAL DE TOTES LES CONVERSES
+    # =====================================================
+    def get_global_context(user_id, current_conv_id, limit=15):
+        """Carrega els últims missatges de TOTES les converses de l'usuari"""
+        try:
+            # 1. Obtenir IDs de totes les converses de l'usuari
+            convs = supabase.table("conversations").select("id").eq("user_id", user_id).execute()
+            all_conv_ids = [c['id'] for c in convs.data]
+            
+            # 2. Filtrar només les converses que NO són l'actual (per no duplicar)
+            other_conv_ids = [cid for cid in all_conv_ids if cid != current_conv_id]
+            
+            if not other_conv_ids:
+                return []
+            
+            # 3. Carregar últims missatges d'aquestes altres converses
+            recent_msgs = supabase.table("messages").select("*").in_("conversation_id", other_conv_ids).order("created_at", desc=True).limit(limit).execute()
+            
+            if recent_msgs.data:
+                return recent_msgs.data # Retorna els més recents primer
+            return []
+        except Exception as e:
+            st.warning(f"⚠️ No s'ha pogut carregar l'historial global: {e}")
+            return []
+
+    # =====================================================
+    # 🔑 NOU: GUARDAR AUTOMÀTICAMENT TOTS ELS MISSATGES DE L'USUARI
+    # =====================================================
+    def auto_save_user_message(text):
+        """Guarda el missatge de l'usuari directament a long_term_memories per a futur"""
+        if len(text) > 10: # No guardar coses molt curtes com "hola"
+            save_memory(f"Usuari va dir: {text}")
+
     def process_uploaded_file(uploaded_file):
-        """Processa fitxers CSV/Excel i guarda les dades com a memòries"""
         try:
             file_ext = uploaded_file.name.split('.')[-1].lower()
-            
             if file_ext == 'csv':
                 df = pd.read_csv(uploaded_file)
             elif file_ext in ['xlsx', 'xls']:
@@ -78,72 +108,11 @@ def mostrar_xat():
             data_summary += df.to_string(index=False)
             
             save_memory(f"FITXER PUJAT: {uploaded_file.name} - {data_summary[:500]}...")
-            st.success(f"✅ Fitxer processat: {len(df)} files guardades com a memòria")
+            st.success(f"✅ Fitxer processat: {len(df)} files guardades")
             return True
         except Exception as e:
             st.error(f"❌ Error processant fitxer: {str(e)}")
             return False
-
-    def extract_and_save_memories(user_message, assistant_response):
-        """Versió simplificada i amb DEBUG"""
-        try:
-            extraction = client.chat.completions.create(
-                model="qwen-turbo",
-                messages=[{
-                    "role": "user",
-                    "content": f"""Extreu NOMÉS fets personals rellevants (edat, vehicle, lesions, objectius, dades físiques).
-Si no hi ha cap fet, respon "CAP".
-Si n'hi ha, respon amb una llista separada per comes.
-
-Exemple: "Tinc 32 anys" -> "32 anys"
-Exemple: "Vull córrer" -> "Objectiu: córrer"
-
-Text a analitzar:
-{user_message}
-"""
-                }],
-                temperature=0,
-                max_tokens=100
-            )
-            
-            content = extraction.choices[0].message.content.strip()
-            
-            # DEBUG: Mostrar què ha detectat la IA
-            st.info(f"🔍 IA detecta fets: '{content}'")
-
-            if content.upper() != "CAP" and content:
-                # Separar per comes o salts de línia
-                facts = [f.strip() for f in content.replace(',', '\n').split('\n') if f.strip()]
-                for fact in facts:
-                    if fact:
-                        save_memory(fact)
-                        st.success(f"💾 Guardat: {fact}")
-                
-        except Exception as e:
-            st.error(f"❌ Error extracció memòria: {str(e)}")
-
-    # =====================================================
-    # 🔍 FUNCIÓ DE MEMÒRIA CORREGIDA (CÀRREGA DIRECTA)
-    # =====================================================
-    def get_relevant_memories(query_text, limit=50):
-        """CARREGA TOTES LES MEMÒRIES DE L'USUARI (solució definitiva)"""
-        try:
-            # Obtenim TOTES les memòries ordenades per data (les més recents primer)
-            all_memories = supabase.table("long_term_memories").select("*").eq(
-                "user_id", user_id
-            ).order("created_at", desc=True).limit(limit).execute()
-            
-            if all_memories.data:
-                memories = [row["content"] for row in all_memories.data]
-                st.info(f"📚 Carregades {len(memories)} memòries de la BD")
-                return memories
-            else:
-                st.warning("⚠️ Cap memòria trobada a la BD")
-                return []
-                
-        except Exception as e:
-            st.error(f"❌ ERROR carregant memòries: {str(e)}")
-            return []
 
     # Inicialitzar conversa
     if st.session_state.conv_id is None:
@@ -165,8 +134,8 @@ Text a analitzar:
             .data
         )
 
-    st.title("💬 Xat IA - Entrenador de Running")
-    st.caption("Memòria intel·ligent activa: recordo el teu historial + llegeixo imatges 📸")
+    st.title("💬 Xat IA - Memòria Total")
+    st.caption("🧠 Recorda TOTES les converses + imatges + fitxers")
 
     convs = (
         supabase.table("conversations")
@@ -202,29 +171,24 @@ Text a analitzar:
     # Botons de gestió
     col_test1, col_test2, col_test3 = st.columns(3)
     with col_test1:
-        if st.button(" Provar Memòria"):
+        if st.button("🧪 Provar Memòria"):
             save_memory("Tinc 32 anys")
-            save_memory("El meu cotxe és un Toyota amb matrícula ABC-1234")
+            save_memory("M'agrada el sushi")
             st.info("✅ Memòries de prova guardades!")
     with col_test2:
-        if st.button("📊 Veure Estadístiques"):
+        if st.button("📊 Estadístiques"):
             total_mem = supabase.table("long_term_memories").select("*", count="exact").eq("user_id", user_id).execute()
             st.metric("Total memòries", total_mem.count if hasattr(total_mem, 'count') else 0)
     with col_test3:
         if st.button("📋 Veure memòries"):
-            all_mems = supabase.table("long_term_memories").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(20).execute()
+            all_mems = supabase.table("long_term_memories").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(10).execute()
             if all_mems.data:
                 for i, mem in enumerate(all_mems.data):
-                    st.text_area(
-                        f" {mem['created_at'][:10]}", 
-                        mem['content'], 
-                        height=80,
-                        key=f"mem_{i}_{mem.get('id', i)}"
-                    )
+                    st.text_area(f"📅 {mem['created_at'][:10]}", mem['content'], height=60, key=f"mem_{i}_{mem.get('id', i)}")
             else:
                 st.info("Cap memòria guardada encara")
 
-    st.markdown("###  Adjuntar fitxers")
+    st.markdown("### 📎 Adjuntar fitxers")
     col1, col2, col3 = st.columns([3, 1, 1])
     
     with col1:
@@ -244,13 +208,13 @@ Text a analitzar:
 
     # Processar IMATGE amb OCR
     if uploaded_image:
-        with st.spinner("🔍 Llegint text de la imatge..."):
+        with st.spinner(" Llegint text de la imatge..."):
             ocr_text = extract_text_from_image(uploaded_image)
             if ocr_text and "Error" not in ocr_text and "⚠️" not in ocr_text:
                 save_memory(f"IMATGE PUJADA (OCR): {ocr_text}")
-                st.info(f"📄 Text detectat: {ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}")
+                st.info(f"📄 Text detectat: {ocr_text[:200]}...")
             else:
-                st.warning(f"⚠️ {ocr_text}")
+                st.warning(f"️ {ocr_text}")
 
     # Mostrar missatges
     for m in st.session_state.msgs:
@@ -260,7 +224,7 @@ Text a analitzar:
             st.markdown(m["content"])
 
     # =====================================================
-    # PROCESSAR PROMPT AMB MEMÒRIA GARANTIDA
+    # PROCESSAR PROMPT AMB MEMÒRIA GLOBAL
     # =====================================================
     if prompt:
         image_url = None
@@ -274,6 +238,7 @@ Text a analitzar:
                 image_url = supabase.storage.from_("chat-images").get_public_url(fn)
                 st.image(uploaded_image, width=300)
 
+        # 1. Guardar missatge actual
         st.session_state.msgs.append({"role": "user", "content": prompt, "image_url": image_url})
         supabase.table("messages").insert({
             "conversation_id": st.session_state.conv_id,
@@ -282,67 +247,64 @@ Text a analitzar:
             "image_url": image_url
         }).execute()
 
-        # 🔍 CARREGAR TOTES LES MEMÒRIES
-        memories = get_relevant_memories(prompt, limit=50)
+        # 2. Guardar automàticament a memòria a llarg termini (per si preguntes d'aquí un mes)
+        auto_save_user_message(prompt)
 
-        if memories:
-            context = "HISTORIAL COMPLET DE L'USUARI (dades més recents primer):\n\n"
-            for i, m in enumerate(memories):
-                context += f"{i+1}. {m}\n"
+        # 3. Obtenir Context Global (Altres converses)
+        with st.spinner("🧠 Recuperant memòria d'altres converses..."):
+            global_history = get_global_context(user_id, st.session_state.conv_id, limit=15)
             
-            with st.expander("👁️ Veure dades que rep la IA"):
-                st.text(context[:2000])
-        else:
-            context = "No hi ha historial previ de l'usuari."
+            # Formatejar historial global
+            global_context_text = ""
+            if global_history:
+                global_context_text = "HISTORIAL RECENT D'ALTRES CONVERSES:\n"
+                for msg in global_history:
+                    role_emoji = "👤" if msg['role'] == 'user' else "🤖"
+                    global_context_text += f"{role_emoji} {msg['content']}\n"
+            
+            # 4. Construir Prompt del Sistema
+            sys_msg = {
+                "role": "system",
+                "content": (
+                    "Ets un assistent personal expert. "
+                    "Tens accés a l'historial recent d'altres converses de l'usuari:\n\n"
+                    f"{global_context_text}\n\n"
+                    "INSTRUCCIONS: "
+                    "1. Utilitza aquest historial per recordar coses que l'usuari ha dit abans. "
+                    "2. Si l'usuari pregunta per alguna dada (edat, cotxe, preferències) i la veus a l'historial, RESPON UTILITZANT-LA. "
+                    "3. Si l'usuari diu alguna cosa nova (ex: 'Tinc 32 anys'), recorda-ho per a la propera vegada. "
+                    "4. Respon sempre en català."
+                )
+            }
+            
+            # Historial de la conversa ACTUAL (últims 8 missatges)
+            current_history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.msgs[-8:]]
+            
+            # Combinar: System + Global Context (com a missatge d'usuari fictici) + Current History
+            full_history = [sys_msg]
+            if global_context_text:
+                full_history.append({"role": "user", "content": "[MEMÒRIA DEL SISTEMA] Aquest és el teu historial recent d'altres xats:"})
+                full_history.append({"role": "assistant", "content": global_context_text})
+            
+            full_history.extend(current_history)
 
-        sys_msg = {
-            "role": "system",
-            "content": (
-                "Ets un assistent personal expert. "
-                f"Tens accés a l'historial COMPLET de l'usuari:\n\n{context}\n\n"
-                "INSTRUCCIONS CRÍTIQUES:\n"
-                "1. LLEGEIX atentament TOTES les dades de dalt. Les primeres són les més recents.\n"
-                "2. Si hi ha dades CONTRADICTÒRIES (ex: '30 anys' i '32 anys'), UTILITZA LA MÉS RECENT (la que apareix primer).\n"
-                "3. Si l'usuari pregunta per 'cotxe', 'matrícula', 'multa', 'anys', 'cabell', etc., BUSCA AQUESTES PARAULES a l'historial.\n"
-                "4. Si trobes la informació, RESPON UTILITZANT LES DADES CONCRETES de l'historial.\n"
-                "5. Cita la font: 'Segons les teves dades guardades el [data]...'\n"
-                "6. Si no hi ha informació rellevant, digues 'No tinc aquesta informació guardada'.\n"
-                "7. Respon sempre en català, de forma clara i directa."
-            )
-        }
-        
-        history = [sys_msg] + [
-            {"role": m["role"], "content": m["content"]}
-            for m in st.session_state.msgs[-8:]
-        ]
-
-        try:
-            res = client.chat.completions.create(
-                model="qwen-turbo",
-                messages=history,
-                temperature=0.3
-            )
-            ans = res.choices[0].message.content
-            st.markdown(ans)
-            
-            st.session_state.msgs.append({"role": "assistant", "content": ans, "image_url": None})
-            supabase.table("messages").insert({
-                "conversation_id": st.session_state.conv_id,
-                "role": "assistant",
-                "content": ans
-            }).execute()
-            
-            # Intentar extreure memòries (amb el debug ara visible)
-            extract_and_save_memories(prompt, ans)
-            
-        except Exception as e:
-            st.error(f"❌ ERROR IA: {str(e)}")
-
-    # =====================================================
-    # BOTÓ EXTRA PER FORÇAR GUARDAR (DEBUG)
-    # =====================================================
-    if prompt:
-        if st.button("💾 Forçar guardar text actual com a memòria"):
-            save_memory(prompt)
-            st.success("✅ Text guardat manualment!")
-            st.rerun()
+        with st.chat_message("assistant"):
+            with st.spinner("Pensant..."):
+                try:
+                    res = client.chat.completions.create(
+                        model="qwen-turbo",
+                        messages=full_history,
+                        temperature=0.7
+                    )
+                    ans = res.choices[0].message.content
+                    st.markdown(ans)
+                    
+                    st.session_state.msgs.append({"role": "assistant", "content": ans, "image_url": None})
+                    supabase.table("messages").insert({
+                        "conversation_id": st.session_state.conv_id,
+                        "role": "assistant",
+                        "content": ans
+                    }).execute()
+                    
+                except Exception as e:
+                    st.error(f"❌ ERROR IA: {str(e)}")
