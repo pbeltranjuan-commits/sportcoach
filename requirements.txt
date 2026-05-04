@@ -2,3 +2,4 @@ streamlit
 openai
 supabase
 pandas
+sentence-transformers
