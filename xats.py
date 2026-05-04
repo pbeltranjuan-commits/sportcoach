@@ -3,8 +3,10 @@ from database import get_db
 from openai import OpenAI
 from datetime import datetime
 import uuid
+import pandas as pd
+import io
 
-# --- EMBEDDINGS LOCALS (sense OpenAI) ---
+# --- EMBEDDINGS LOCALS ---
 @st.cache_resource
 def load_embedding_model():
     from sentence_transformers import SentenceTransformer
@@ -42,6 +44,34 @@ def mostrar_xat():
             return True
         except Exception as e:
             st.error(f"❌ ERROR GUARDANT MEMÒRIA: {str(e)}")
+            return False
+
+    def process_uploaded_file(uploaded_file):
+        """Processa fitxers CSV/Excel i guarda les dades com a memòries"""
+        try:
+            file_ext = uploaded_file.name.split('.')[-1].lower()
+            
+            if file_ext == 'csv':
+                df = pd.read_csv(uploaded_file)
+            elif file_ext in ['xlsx', 'xls']:
+                df = pd.read_excel(uploaded_file)
+            else:
+                st.error("Format no suportat. Utilitza CSV o Excel")
+                return False
+            
+            # Converteix el DataFrame a text estructurat
+            data_summary = f"Dades del fitxer {uploaded_file.name}:\n"
+            data_summary += f"Files: {len(df)}, Columnes: {', '.join(df.columns)}\n"
+            data_summary += df.to_string(index=False)
+            
+            # Guarda com a memòria
+            save_memory(f"FITXER PUJAT: {uploaded_file.name} - {data_summary[:500]}...")
+            
+            st.success(f"✅ Fitxer processat: {len(df)} files guardades com a memòria")
+            return True
+            
+        except Exception as e:
+            st.error(f"❌ Error processant fitxer: {str(e)}")
             return False
 
     def extract_and_save_memories(user_message, assistant_response):
@@ -175,33 +205,56 @@ Escriu només la reformulació en català, sense explicacions."""
                 st.rerun()
 
     st.markdown("---")
+    
+    # Botons de prova
+    col_test1, col_test2 = st.columns(2)
+    with col_test1:
+        if st.button("🧪 Provar Memòria"):
+            save_memory("Tinc 30 anys")
+            save_memory("El meu cabell és roig")
+            st.info("Memòries de prova guardades!")
+    with col_test2:
+        if st.button("📊 Veure Estadístiques"):
+            total_mem = supabase.table("long_term_memories").select("*", count="exact").eq("user_id", user_id).execute()
+            st.metric("Total memòries", total_mem.count)
 
-    if st.button("🧪 PROVAR MEMÒRIA MANUALMENT"):
-        test_facts = ["Tinc 30 anys", "El meu cabell és roig", "Vaig trencar el menisc fa un any"]
-        for f in test_facts:
-            save_memory(f)
-        st.info("Memòries de prova guardades! Pregunta 'Soc vell?' o 'Quants anys tinc?' per verificar.")
-
-    col1, col2 = st.columns([4, 1])
+    # Input + Uploads múltiples
+    st.markdown("### 📎 Adjuntar fitxers")
+    col1, col2, col3 = st.columns([3, 1, 1])
+    
     with col1:
-        prompt = st.chat_input("Pregunta...")
+        prompt = st.chat_input("Pregunta sobre running, lesions, objectius...")
+    
     with col2:
-        uploaded_file = st.file_uploader("", type=["jpg", "png"], label_visibility="collapsed")
+        uploaded_image = st.file_uploader("Imatge", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+    
+    with col3:
+        uploaded_file = st.file_uploader("CSV/Excel", type=["csv", "xlsx", "xls"], label_visibility="collapsed")
 
+    # Processar fitxer CSV/Excel
+    if uploaded_file:
+        with st.spinner(f"📊 Processant {uploaded_file.name}..."):
+            if process_uploaded_file(uploaded_file):
+                st.success("✅ Dades guardades a la memòria!")
+
+    # Mostrar missatges
     for m in st.session_state.msgs:
         with st.chat_message(m["role"]):
             if m.get("image_url"):
-                st.image(m["image_url"], width=300)
+                st.image(m["image_url"], width=300, caption="📷 Imatge adjunta")
             st.markdown(m["content"])
 
     if prompt:
         image_url = None
-        if uploaded_file:
+        
+        # Pujar imatge
+        if uploaded_image:
             with st.spinner("Pujant imatge..."):
-                ext = uploaded_file.name.split('.')[-1]
+                ext = uploaded_image.name.split('.')[-1]
                 fn = f"{user_id}/{st.session_state.conv_id}/{uuid.uuid4()}.{ext}"
-                supabase.storage.from_("chat-images").upload(fn, uploaded_file.getvalue())
+                supabase.storage.from_("chat-images").upload(fn, uploaded_image.getvalue())
                 image_url = supabase.storage.from_("chat-images").get_public_url(fn)
+                st.image(uploaded_image, width=300)
 
         st.session_state.msgs.append({"role": "user", "content": prompt, "image_url": image_url})
         supabase.table("messages").insert({
