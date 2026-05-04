@@ -5,3 +5,4 @@ pandas
 sentence-transformers
 pytesseract
 Pillow
+openpyxl
