@@ -3,3 +3,5 @@ openai
 supabase
 pandas
 sentence-transformers
+pytesseract
+Pillow
