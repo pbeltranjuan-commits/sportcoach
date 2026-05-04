@@ -65,21 +65,21 @@ def mostrar_xat():
     st.title("💬 Xat IA + Memòria SQL")
     
     # Botó per veure TOTES les memòries (debug)
-    if st.button(" VEURE TOTES LES MEVES DADES GUARDADES"):
+    if st.button("📋 VEURE TOTES LES MEVES DADES GUARDADES"):
         try:
             res = supabase.table("long_term_memories").select("*").eq(
                 "user_id", user_id
             ).order("created_at", desc=True).limit(20).execute()
             
-            if res.
-                st.info(f" Total: {len(res.data)} registres trobats")
+            if res.data:  # ✅ CORREGIT: afegit .data
+                st.info(f"📚 Total: {len(res.data)} registres trobats")
                 for i, r in enumerate(res.data):
                     with st.expander(f"{i+1}. {r['created_at'][:10]}"):
                         st.write(r['content'])
             else:
-                st.warning(" Cap dada guardada encara")
+                st.warning("⚠️ Cap dada guardada encara")
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"❌ Error: {e}")
 
     st.markdown("---")
     
@@ -87,7 +87,7 @@ def mostrar_xat():
     with col1:
         prompt = st.chat_input("Pregunta...")
     with col2:
-        uploaded_img = st.file_uploader(" Imatge", type=["jpg","png","jpeg"])
+        uploaded_img = st.file_uploader("📷 Imatge", type=["jpg","png","jpeg"])
 
     # Processar imatge IMMEDIATAMENT
     if uploaded_img:
@@ -116,16 +116,14 @@ def mostrar_xat():
             "content": prompt
         }).execute()
         
-        # 🔍 CERCAR TOTES LES MEMÒRIES (no només les semblants)
+        # 🔍 CERCAR TOTES LES MEMÒRIES
         with st.spinner("Buscant a la base de dades..."):
             try:
-                # Obtenim TOTES les memòries de l'usuari (màxim 50)
                 all_memories = supabase.table("long_term_memories").select("*").eq(
                     "user_id", user_id
                 ).order("created_at", desc=True).limit(50).execute()
                 
-                if all_memories.
-                    # Creem un context amb TOTES les dades
+                if all_memories.data:  # ✅ CORREGIT: afegit .data
                     context = "DADES DE L'USUARI (tot l'historial):\n\n"
                     for mem in all_memories.data:
                         context += f"- {mem['content']}\n"
@@ -137,7 +135,7 @@ def mostrar_xat():
                     
             except Exception as e:
                 context = "Error carregant dades."
-                st.error(f"Error cerca: {e}")
+                st.error(f"❌ Error cerca: {e}")
 
         # Respondre amb IA
         with st.chat_message("assistant"):
@@ -161,13 +159,12 @@ INSTRUCCIONS:
                     res = client.chat.completions.create(
                         model="qwen-turbo",
                         messages=history,
-                        temperature=0.3  # Més determinista
+                        temperature=0.3
                     )
                     
                     ans = res.choices[0].message.content
                     st.markdown(ans)
                     
-                    # Guardar resposta
                     st.session_state.msgs.append({"role": "assistant", "content": ans})
                     supabase.table("messages").insert({
                         "conversation_id": st.session_state.conv_id,
