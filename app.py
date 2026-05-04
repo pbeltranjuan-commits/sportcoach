@@ -18,7 +18,7 @@ if 'user_profile' not in st.session_state:
 
 if st.session_state.user is None:
     st.title("🏃 SportCoach IA")
-    st.caption("Running & Trail Running amb Intel·ligència Artificial")
+    st.caption("Esports amb Intel·ligència Artificial")
     
     tab1, tab2 = st.tabs(["🔑 Iniciar Sessió", "📝 Registrar-se"])
     
@@ -52,7 +52,7 @@ if st.session_state.user is None:
                 st.error(f"Error: {error}")
 
 else:
-    user_name = st.session_state.user_profile.get('full_name', 'Corredor') if st.session_state.user_profile else st.session_state.user.email.split('@')[0]
+    user_name = st.session_state.user_profile.get('full_name', 'esportista') if st.session_state.user_profile else st.session_state.user.email.split('@')[0]
     
     st.sidebar.title(f"👤 {user_name}")
     st.sidebar.write(f"📧 {st.session_state.user.email}")
