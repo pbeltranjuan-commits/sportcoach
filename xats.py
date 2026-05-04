@@ -24,7 +24,6 @@ def extract_text_from_image(image_file):
     try:
         import pytesseract
         img = Image.open(image_file)
-        # Suporta català, castellà i anglès
         text = pytesseract.image_to_string(img, lang='cat+spa+eng')
         return text.strip() if text.strip() else "Imatge sense text detectable"
     except ImportError:
@@ -92,7 +91,7 @@ def mostrar_xat():
                 messages=[{
                     "role": "user",
                     "content": f"""Analitza aquesta conversa i extreu NOMÉS fets rellevants sobre l'usuari
-(estat físic, lesions, cansament, objectius, hàbits de running, emocions importants, edat, pes, característiques personals).
+(estat físic, lesions, cansament, objectius, hàbits de running, emocions importants, edat, pes, característiques personals, vehicle, multes).
 Si no hi ha res rellevant, respon exactament: CAP
 
 Usuari: {user_message}
@@ -120,10 +119,16 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
         "lesió", "lesions", "menisc", "dolor", "cabell", "pes", "alçada",
         "objectiu", "hàbit", "cansament", "cansat", "fatigat",
         "viejo", "joven", "edad", "años", "quién soy", "cómo estoy",
-        "lesión", "pelo", "peso", "altura", "objetivo", "cansado"
+        "lesión", "pelo", "peso", "altura", "objetivo", "cansado",
+        "cotxe", "vehicle", "matrícula", "multa", "radar", "infracció",
+        "coche", "vehículo", "matricula", "multa", "radar", "infracción"
     ]
 
     def get_relevant_memories(query_text, limit=5):
+        """Cerca vectorial + FALLBACK per text simple"""
+        memories = []
+        
+        # 1. Intentar cerca vectorial (RAG original)
         try:
             query_lower = query_text.lower()
             is_personal = any(kw in query_lower for kw in PERSONAL_KEYWORDS)
@@ -158,11 +163,33 @@ Escriu només la reformulació en català, sense explicacions."""
             }).execute()
 
             if res.data:
-                return [row["content"] for row in res.data]
-            return []
+                memories = [row["content"] for row in res.data]
+                
         except Exception as e:
-            st.error(f"❌ ERROR CERCA RAG: {str(e)}")
-            return []
+            st.warning(f"⚠️ Cerca vectorial: {str(e)}")
+
+        # 2. FALLBACK: Si no troba res amb vectors, cerca per text simple
+        if not memories:
+            try:
+                words = [w.lower() for w in query_text.split() if len(w) > 3]
+                for word in words:
+                    res = supabase.table("long_term_memories").select("*").eq(
+                        "user_id", user_id
+                    ).ilike("content", f"%{word}%").limit(limit).execute()
+                    
+                    if res.data:
+                        memories.extend([row["content"] for row in res.data])
+                        break
+                
+                memories = list(dict.fromkeys(memories))[:limit]
+                
+                if memories:
+                    st.info(f"🔍 Trobades {len(memories)} memòries (cerca text)")
+                    
+            except Exception as e:
+                st.warning(f"⚠️ Cerca text: {str(e)}")
+
+        return memories
 
     if st.session_state.conv_id is None:
         res = supabase.table("conversations").insert({
@@ -217,7 +244,8 @@ Escriu només la reformulació en català, sense explicacions."""
 
     st.markdown("---")
     
-    col_test1, col_test2 = st.columns(2)
+    # Botons de gestió
+    col_test1, col_test2, col_test3 = st.columns(3)
     with col_test1:
         if st.button("🧪 Provar Memòria"):
             save_memory("Tinc 30 anys")
@@ -227,6 +255,19 @@ Escriu només la reformulació en català, sense explicacions."""
         if st.button("📊 Veure Estadístiques"):
             total_mem = supabase.table("long_term_memories").select("*", count="exact").eq("user_id", user_id).execute()
             st.metric("Total memòries", total_mem.count if hasattr(total_mem, 'count') else 0)
+    with col_test3:
+        if st.button("📋 Veure memòries"):
+            all_mems = supabase.table("long_term_memories").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(10).execute()
+            if all_mems.data:
+                for i, mem in enumerate(all_mems.data):
+                    st.text_area(
+                        f"📅 {mem['created_at'][:10]}", 
+                        mem['content'], 
+                        height=80,
+                        key=f"mem_{i}_{mem.get('id', i)}"  # ✅ KEY ÚNICA
+                    )
+            else:
+                st.info("Cap memòria guardada encara")
 
     st.markdown("### 📎 Adjuntar fitxers")
     col1, col2, col3 = st.columns([3, 1, 1])
@@ -246,12 +287,11 @@ Escriu només la reformulació en català, sense explicacions."""
             if process_uploaded_file(uploaded_file):
                 st.success("✅ Dades guardades a la memòria!")
 
-    # Processar IMATGE amb OCR 🆕
+    # Processar IMATGE amb OCR
     if uploaded_image:
         with st.spinner("🔍 Llegint text de la imatge..."):
             ocr_text = extract_text_from_image(uploaded_image)
             if ocr_text and "Error" not in ocr_text and "⚠️" not in ocr_text:
-                # Guarda el text extret com a memòria
                 save_memory(f"IMATGE PUJADA (OCR): {ocr_text}")
                 st.info(f"📄 Text detectat: {ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}")
             else:
@@ -298,11 +338,12 @@ Escriu només la reformulació en català, sense explicacions."""
                     "content": (
                         "Ets un entrenador de running personal. "
                         f"Tens accés a l'historial de l'usuari:\n\n{context}\n\n"
-                        "Utilitza aquest historial per personalitzar les respostes. "
-                        "Si hi ha dates, raona temporalment (p.ex. 'fa 3 mesos deies que...'). "
-                        "Si l'historial conté dades rellevants per a la pregunta, utilitza-les SEMPRE. "
-                        "Si l'usuari ha pujat una imatge amb text, el text ja està guardat a l'historial. "
-                        "Respon sempre en català."
+                        "INSTRUCCIONS CRÍTIQUES: "
+                        "1. LLEGEIX atentament l'historial. "
+                        "2. Si conté dades com 'anys', 'cabell', 'cotxe', 'matrícula', 'multa', UTILITZA-LES. "
+                        "3. Si l'usuari pregunta per dades concretes i les trobes, RESPON AMB AQUEIXES DADES. "
+                        "4. Si no hi ha informació, digues 'No tinc aquesta informació guardada'. "
+                        "5. Respon sempre en català."
                     )
                 }
                 history = [sys_msg] + [
@@ -314,7 +355,7 @@ Escriu només la reformulació en català, sense explicacions."""
                     res = client.chat.completions.create(
                         model="qwen-turbo",
                         messages=history,
-                        temperature=0.7
+                        temperature=0.3  # Més determinista
                     )
                     ans = res.choices[0].message.content
                     st.markdown(ans)
