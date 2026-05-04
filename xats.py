@@ -25,6 +25,7 @@ def mostrar_xat():
                 "title": "Nova conversa",
                 "updated_at": datetime.now().isoformat()
             }).execute()
+            st.success(f"✅ Conversa creada: {res.data[0]['id'][:8]}...")
             return res.data[0]['id']
         except Exception as e:
             st.error(f"Error creant conversa: {e}")
@@ -48,37 +49,64 @@ def mostrar_xat():
                 "content": content,
                 "image_url": image_url
             }
-            supabase.table("messages").insert(data).execute()
+            res = supabase.table("messages").insert(data).execute()
+            st.success(f"✅ Missatge {role} guardat a SQL")
+            return res
         except Exception as e:
-            st.error(f"Error guardant: {e}")
+            st.error(f"❌ Error guardant: {e}")
+            return None
     
     def load_conv(cid):
         try:
+            st.info(f" Carregant missatges de: {cid[:8] if cid else 'None'}...")
             res = supabase.table("messages").select("*").eq("conversation_id", cid).order("created_at").execute()
+            st.info(f"📦 Trobats {len(res.data)} missatges a la BD")
+            if res.data:
+                for i, msg in enumerate(res.data):
+                    st.caption(f"{i+1}. {msg['role']}: {msg['content'][:50]}...")
             return res.data
         except Exception as e:
-            st.error(f"Error carregant: {e}")
+            st.error(f"❌ Error carregant: {e}")
             return []
     
     def get_convs():
         try:
-            return supabase.table("conversations").select("*").eq("user_id", user_id).order("updated_at").execute().data
-        except:
+            res = supabase.table("conversations").select("*").eq("user_id", user_id).order("updated_at").execute()
+            st.caption(f"💬 {len(res.data)} converses trobades")
+            return res.data
+        except Exception as e:
+            st.error(f"Error llistant: {e}")
             return []
     
-    # Inicialitzar conversa
+    # Inicialitzar
     if st.session_state.conv_id is None:
         st.session_state.conv_id = create_conv()
         st.session_state.msgs = []
     
-    # 🔄 CARREGA SEMPRE DE LA BD PERQUÈ LA IA VEÏ L'HISTORIAL
+    # CARREGAR DE LA BD
+    st.markdown("---")
+    st.subheader("🔍 Debug - Carregant dades...")
     db_msgs = load_conv(st.session_state.conv_id)
+    
     if db_msgs and not st.session_state.msgs:
         st.session_state.msgs = db_msgs
+        st.success(f"✅ Carregats {len(db_msgs)} missatges a memòria")
+    
+    st.markdown("---")
     
     # Interfície
     st.title("💬 Xat IA")
     st.caption("📸 Pots adjuntar fotos")
+    
+    # Mostrar estadístiques
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Missatges en memòria", len(st.session_state.msgs))
+    with col2:
+        st.metric("Conversa actual", st.session_state.conv_id[:8] if st.session_state.conv_id else "Cap")
+    with col3:
+        convs = get_convs()
+        st.metric("Total converses", len(convs) if convs else 0)
     
     convs = get_convs()
     if convs:
@@ -86,12 +114,12 @@ def mostrar_xat():
         with col1:
             opts = {c['title'] or f"Conv {i+1}": c['id'] for i, c in enumerate(convs)}
             sel = st.selectbox("Carregar:", list(opts.keys()))
-            if st.button("Carregar"):
+            if st.button("Carregar seleccionada"):
                 st.session_state.conv_id = opts[sel]
                 st.session_state.msgs = []
                 st.rerun()
         with col2:
-            if st.button(" Nova"):
+            if st.button("🆕 Nova"):
                 st.session_state.conv_id = create_conv()
                 st.session_state.msgs = []
                 st.rerun()
@@ -130,19 +158,22 @@ def mostrar_xat():
                 st.image(image_url, width=300)
             st.markdown(prompt)
         
+        # GUARDAR A SQL
         if st.session_state.conv_id:
             save_msg("user", prompt, image_url)
+            # Espera petita per assegurar que s'ha guardat
+            import time
+            time.sleep(0.5)
         
         with st.chat_message("assistant"):
             with st.spinner("Pensant..."):
-                #  CARREGA L'HISTORIAL ACTUALITZAT DE LA BD
+                # CARREGAR HISTORIAL ACTUALITZAT
                 current_history = load_conv(st.session_state.conv_id)
                 
-                # Fallback si no s'ha guardat encara
-                if not current_history or current_history[-1].get("role") != "user":
-                    current_history.append({"role": "user", "content": prompt, "image_url": image_url})
+                st.info(f"📋 Enviats {len(current_history)} missatges a la IA")
                 
-                history_for_ai = [{"role": "system", "content": "Ets un entrenador de running. Recorda TOT l'historial. Respon en català."}]
+                history_for_ai = [{"role": "system", "content": "Ets un entrenador personal expert en running i trail running. TOTS els missatges es guarden a SQL i pots recordar converses anteriors. Respon en català."}]
+                
                 for msg in current_history:
                     if msg.get("content"):
                         txt = msg["content"]
