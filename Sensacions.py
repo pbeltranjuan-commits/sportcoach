@@ -56,7 +56,7 @@ def process_uploaded_file(uploaded_file, user_id, save_memory_func):
 
 def mostrar_xat():
     if 'user' not in st.session_state or st.session_state.user is None:
-        st.warning(" Has d'iniciar sessió")
+        st.warning("🔒 Has d'iniciar sessió")
         return
 
     supabase = get_db()
@@ -97,7 +97,8 @@ def mostrar_xat():
                 "p_user_id": user_id
             }).execute()
             
-            if res.
+            # ✅ CORREGIT: afegit .data
+            if res.data:
                 return [row["content"] for row in res.data]
             return []
         except Exception as e:
@@ -111,14 +112,15 @@ def mostrar_xat():
         """Carrega els últims missatges de TOTES les converses de l'usuari"""
         try:
             convs = supabase.table("conversations").select("id").eq("user_id", user_id).execute()
-            if not convs. return []
+            # ✅ CORREGIT: afegit .data
+            if not convs.data: return []
             
             all_ids = [c['id'] for c in convs.data]
             msgs = supabase.table("messages").select("*").in_("conversation_id", all_ids).order("created_at", desc=True).limit(limit).execute()
             
             return msgs.data if msgs.data else []
         except Exception as e:
-            st.warning(f"️ Error carregant missatges: {e}")
+            st.warning(f"⚠️ Error carregant missatges: {e}")
             return []
 
     # Inicialitzar conversa
@@ -173,7 +175,8 @@ def mostrar_xat():
     with col_debug3:
         if st.button("📋 Veure memòries recents"):
             all_mems = supabase.table("long_term_memories").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(5).execute()
-            if all_mems.
+            # ✅ CORREGIT: afegit .data
+            if all_mems.data:
                 for i, m in enumerate(all_mems.data):
                     st.text_area(f"{i+1}. {m['created_at'][:10]}", m['content'], height=60, key=f"mem_{i}_{m.get('id', i)}")
             else:
@@ -198,9 +201,9 @@ def mostrar_xat():
     if uploaded_image:
         with st.spinner("🔍 Llegint text de la imatge..."):
             ocr_text = extract_text_from_image(uploaded_image)
-            if ocr_text and "Error" not in ocr_text and "️" not in ocr_text:
+            if ocr_text and "Error" not in ocr_text and "⚠️" not in ocr_text:
                 save_memory(f"IMATGE PUJADA (OCR): {ocr_text}")
-                st.info(f" Text detectat: {ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}")
+                st.info(f"📄 Text detectat: {ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}")
                 # Mostrar imatge pujada
                 with col_img:
                     st.image(uploaded_image, width=200)
@@ -242,7 +245,7 @@ def mostrar_xat():
 
         with st.chat_message("assistant"):
             with st.spinner("🧠 Consultat memòria i pensant..."):
-                # 3️ OBTENIR CONTEXT COMBINAT
+                # 3️⃣ OBTENIR CONTEXT COMBINAT
                 
                 # A. Memòria rellevant (Sensacions, OCR, Fets antics)
                 long_term = search_long_term_memories(prompt, limit=5)
