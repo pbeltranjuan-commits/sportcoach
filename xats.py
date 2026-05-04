@@ -4,6 +4,17 @@ from openai import OpenAI
 from datetime import datetime
 import uuid
 
+# --- EMBEDDINGS LOCALS (sense OpenAI) ---
+@st.cache_resource
+def load_embedding_model():
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+
+def get_embedding(text):
+    model = load_embedding_model()
+    emb = model.encode(text, normalize_embeddings=True)
+    return emb.tolist()
+
 
 def mostrar_xat():
     if 'user' not in st.session_state or st.session_state.user is None:
@@ -19,12 +30,10 @@ def mostrar_xat():
     if 'msgs' not in st.session_state:
         st.session_state.msgs = []
 
-    # --- GUARDAR MEMÒRIA (amb data) ---
     def save_memory(content_text):
         try:
             dated_content = f"[{datetime.now().strftime('%Y-%m-%d')}] {content_text}"
-            emb_res = client.embeddings.create(input=dated_content, model="text-embedding-3-small")
-            emb = emb_res.data[0].embedding
+            emb = get_embedding(dated_content)
             supabase.table("long_term_memories").insert({
                 "user_id": user_id,
                 "content": dated_content,
@@ -35,7 +44,6 @@ def mostrar_xat():
             st.error(f"❌ ERROR GUARDANT MEMÒRIA: {str(e)}")
             return False
 
-    # --- EXTRACCIÓ INTEL·LIGENT: només guarda fets rellevants ---
     def extract_and_save_memories(user_message, assistant_response):
         try:
             extraction = client.chat.completions.create(
@@ -54,7 +62,10 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
                 temperature=0,
                 max_tokens=200
             )
-            facts_text = extraction.choices[0].message.content.strip()
+            content = extraction.choices[0].message.content
+            if not content:
+                return
+            facts_text = content.strip()
             if facts_text.upper() != "CAP":
                 for fact in facts_text.split("\n"):
                     fact = fact.strip("- ").strip()
@@ -63,7 +74,6 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
         except Exception as e:
             st.error(f"❌ Error extracció memòria: {str(e)}")
 
-    # --- PARAULES CLAU PER FORÇAR CERCA PERSONAL ---
     PERSONAL_KEYWORDS = [
         "vell", "jove", "edat", "anys", "quants anys", "qui soc", "com estic",
         "lesió", "lesions", "menisc", "dolor", "cabell", "pes", "alçada",
@@ -72,38 +82,33 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
         "lesión", "pelo", "peso", "altura", "objetivo", "cansado"
     ]
 
-    # --- CERCA RAG AMB QUERY EXPANSION + FIXES SEMÀNTICS ---
     def get_relevant_memories(query_text, limit=5):
         try:
             query_lower = query_text.lower()
-
-            # Fix 3: si la pregunta és sobre l'usuari, forçar cerca personal
             is_personal = any(kw in query_lower for kw in PERSONAL_KEYWORDS)
 
             if is_personal:
                 search_query = "edat anys lesions estat físic característiques personals objectius de l'usuari"
             else:
-                # Fix 2: query expansion millorada
-                expanded = client.chat.completions.create(
-                    model="qwen-turbo",
-                    messages=[{
-                        "role": "user",
-                        "content": f"""Ets un assistent que busca informació personal d'un usuari en una base de dades de memòries.
-Reformula la pregunta per trobar dades com: edat, lesions, estat físic, objectius, hàbits, emocions.
+                try:
+                    expanded = client.chat.completions.create(
+                        model="qwen-turbo",
+                        messages=[{
+                            "role": "user",
+                            "content": f"""Reformula aquesta pregunta per buscar informació personal d'un usuari (edat, lesions, estat físic, objectius, hàbits, emocions).
 Pregunta: {query_text}
-Escriu només la reformulació en català, sense explicacions. Exemple: 'edat anys informació personal de l'usuari'"""
-                    }],
-                    temperature=0,
-                    max_tokens=80
-                )
-                search_query = expanded.choices[0].message.content.strip()
+Escriu només la reformulació en català, sense explicacions."""
+                        }],
+                        temperature=0,
+                        max_tokens=80
+                    )
+                    exp_content = expanded.choices[0].message.content
+                    search_query = exp_content.strip() if exp_content else query_text
+                except Exception:
+                    search_query = query_text
 
-            query_emb = client.embeddings.create(
-                input=search_query,
-                model="text-embedding-3-small"
-            ).data[0].embedding
+            query_emb = get_embedding(search_query)
 
-            # Fix 1: threshold més baix per millor recall
             res = supabase.rpc("match_memories", {
                 "query_embedding": query_emb,
                 "match_threshold": 0.3,
@@ -118,7 +123,6 @@ Escriu només la reformulació en català, sense explicacions. Exemple: 'edat an
             st.error(f"❌ ERROR CERCA RAG: {str(e)}")
             return []
 
-    # --- INICIALITZACIÓ CONVERSA ---
     if st.session_state.conv_id is None:
         res = supabase.table("conversations").insert({
             "user_id": user_id,
@@ -138,11 +142,9 @@ Escriu només la reformulació en català, sense explicacions. Exemple: 'edat an
             .data
         )
 
-    # --- INTERFÍCIE ---
     st.title("💬 Xat IA - Entrenador de Running")
     st.caption("Memòria intel·ligent activa: recordo el teu historial")
 
-    # Selector de converses
     convs = (
         supabase.table("conversations")
         .select("*")
@@ -174,28 +176,24 @@ Escriu només la reformulació en català, sense explicacions. Exemple: 'edat an
 
     st.markdown("---")
 
-    # Botó de prova manual
     if st.button("🧪 PROVAR MEMÒRIA MANUALMENT"):
         test_facts = ["Tinc 30 anys", "El meu cabell és roig", "Vaig trencar el menisc fa un any"]
         for f in test_facts:
             save_memory(f)
         st.info("Memòries de prova guardades! Pregunta 'Soc vell?' o 'Quants anys tinc?' per verificar.")
 
-    # Input i uploader
     col1, col2 = st.columns([4, 1])
     with col1:
         prompt = st.chat_input("Pregunta...")
     with col2:
         uploaded_file = st.file_uploader("", type=["jpg", "png"], label_visibility="collapsed")
 
-    # Mostrar historial
     for m in st.session_state.msgs:
         with st.chat_message(m["role"]):
             if m.get("image_url"):
                 st.image(m["image_url"], width=300)
             st.markdown(m["content"])
 
-    # Processament del missatge
     if prompt:
         image_url = None
         if uploaded_file:
@@ -205,7 +203,6 @@ Escriu només la reformulació en català, sense explicacions. Exemple: 'edat an
                 supabase.storage.from_("chat-images").upload(fn, uploaded_file.getvalue())
                 image_url = supabase.storage.from_("chat-images").get_public_url(fn)
 
-        # Guardar missatge usuari
         st.session_state.msgs.append({"role": "user", "content": prompt, "image_url": image_url})
         supabase.table("messages").insert({
             "conversation_id": st.session_state.conv_id,
@@ -216,16 +213,13 @@ Escriu només la reformulació en català, sense explicacions. Exemple: 'edat an
 
         with st.chat_message("assistant"):
             with st.spinner("Consultant memòria i pensant..."):
-                # 1. Buscar memòries rellevants
                 memories = get_relevant_memories(prompt, limit=5)
 
-                # 2. Construir context
                 if memories:
                     context = "HISTORIAL DE L'USUARI (amb dates):\n" + "\n".join([f"- {m}" for m in memories])
                 else:
                     context = "No hi ha historial previ de l'usuari."
 
-                # 3. Cridar la IA
                 sys_msg = {
                     "role": "system",
                     "content": (
@@ -249,19 +243,13 @@ Escriu només la reformulació en català, sense explicacions. Exemple: 'edat an
                         temperature=0.7
                     )
                     ans = res.choices[0].message.content
-
                     st.markdown(ans)
-
-                    # Guardar resposta
                     st.session_state.msgs.append({"role": "assistant", "content": ans, "image_url": None})
                     supabase.table("messages").insert({
                         "conversation_id": st.session_state.conv_id,
                         "role": "assistant",
                         "content": ans
                     }).execute()
-
-                    # 4. Extracció intel·ligent (només fets rellevants)
                     extract_and_save_memories(prompt, ans)
-
                 except Exception as e:
                     st.error(f"❌ ERROR IA: {str(e)}")
