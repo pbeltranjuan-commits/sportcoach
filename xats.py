@@ -125,7 +125,7 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
                 "user_id", user_id
             ).order("created_at", desc=True).limit(limit).execute()
             
-            if all_memories.
+            if all_memories.data:  # ✅ CORRECCIÓ DE SINTAXI AQUÍ
                 memories = [row["content"] for row in all_memories.data]
                 st.info(f"📚 Carregades {len(memories)} memòries de la BD")
                 return memories
@@ -203,15 +203,16 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
             total_mem = supabase.table("long_term_memories").select("*", count="exact").eq("user_id", user_id).execute()
             st.metric("Total memòries", total_mem.count if hasattr(total_mem, 'count') else 0)
     with col_test3:
+        # ✅ CORRECCIÓ DE SINTAXI I KEYS
         if st.button("📋 Veure memòries"):
             all_mems = supabase.table("long_term_memories").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(20).execute()
-            if all_mems.
+            if all_mems.data:
                 for i, mem in enumerate(all_mems.data):
                     st.text_area(
                         f"📅 {mem['created_at'][:10]}", 
                         mem['content'], 
                         height=80,
-                        key=f"mem_{i}_{mem.get('id', i)}"
+                        key=f"mem_{i}_{mem.get('id', i)}"  # KEY ÚNICA
                     )
             else:
                 st.info("Cap memòria guardada encara")
@@ -277,7 +278,7 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
         with st.chat_message("assistant"):
             with st.spinner("Consultant memòria i pensant..."):
                 
-                # 🔍 CARREGAR TOTES LES MEMÒRIES
+                # 🔍 CARREGAR TOTES LES MEMÒRIES (solució per recordar sempre l'última dada)
                 memories = get_relevant_memories(prompt, limit=50)
 
                 if memories:
@@ -286,8 +287,8 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
                     for i, m in enumerate(memories):
                         context += f"{i+1}. {m}\n"
                     
-                    # 🔍 DEBUG: mostra quines dades s'envien a la IA
-                    with st.expander("👁️ Veure dades que rep la IA"):
+                    #  DEBUG: mostra quines dades s'envien a la IA
+                    with st.expander("️ Veure dades que rep la IA"):
                         st.text(context[:2000])
                 else:
                     context = "No hi ha historial previ de l'usuari."
