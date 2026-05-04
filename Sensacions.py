@@ -51,7 +51,7 @@ def mostrar_sensacions():
 
     if st.button("💾 Guardar", type="primary", use_container_width=True):
         try:
-            # 1. Guardar a la taula training_sensations
+            # 1. Guardar a la taula training_sensations (amb conflict fix)
             data = {
                 "user_id": user_id,
                 "date": date.isoformat(),
@@ -62,7 +62,10 @@ def mostrar_sensacions():
                 "motivation": motivation,
                 "notes": notes if notes else None
             }
-            supabase.table("training_sensations").upsert(data).execute()
+            supabase.table("training_sensations").upsert(
+                data,
+                on_conflict="user_id,date"
+            ).execute()
 
             # 2. Guardar a memòria RAG perquè el xat ho sàpiga
             memory_text = (
