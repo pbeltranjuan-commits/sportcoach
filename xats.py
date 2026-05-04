@@ -16,48 +16,53 @@ def mostrar_xat():
     if 'conv_id' not in st.session_state: st.session_state.conv_id = None
     if 'msgs' not in st.session_state: st.session_state.msgs = []
 
-    # --- FUNCIÓ DE GUARDAT (AMB ERRORS VISIBLES) ---
+    # --- GUARDAR MEMÒRIA (SENSE VECTORS) ---
     def save_memory(content_text):
         try:
-            # 1. Crear vector
-            emb_res = client.embeddings.create(input=content_text, model="text-embedding-3-small")
-            emb = emb_res.data[0].embedding
-            
-            # 2. Guardar a Supabase
+            # Guarda directament sense vector
             res = supabase.table("long_term_memories").insert({
                 "user_id": user_id,
                 "content": content_text,
-                "embedding": emb
+                "embedding": None  # Null per ara
             }).execute()
-            
-            st.success(f"✅ Memòria guardada: {content_text[:50]}...")
+            st.success(f"✅ Record guardat: {content_text[:50]}...")
             return True
         except Exception as e:
-            st.error(f"❌ ERROR GUARDANT MEMÒRIA: {str(e)}")
+            st.error(f"❌ ERROR: {str(e)}")
             return False
 
-    # --- FUNCIÓ DE CERCA (RAG) ---
-    def get_relevant_memories(query_text, limit=3):
+    # --- CERCA PER TEXT SIMPLE (ILIKE) ---
+    def search_memories(query_text, limit=5):
         try:
-            query_emb = client.embeddings.create(input=query_text, model="text-embedding-3-small").data[0].embedding
-            res = supabase.rpc("match_memories", {
-                "query_embedding": query_emb,
-                "match_threshold": 0.5,  # Baixa per assegurar que troba alguna cosa
-                "match_count": limit,
-                "p_user_id": user_id
-            }).execute()
+            # Cerca paraules clau al contingut
+            words = query_text.lower().split()
+            results = []
             
-            if res.data:
-                st.info(f"🔍 Trobats {len(res.data)} records: {[r['content'][:30] for r in res.data]}")
-                return [row["content"] for row in res.data]
+            for word in words:
+                if len(word) > 3:  # Només paraules amb sentit
+                    res = supabase.table("long_term_memories")\
+                        .select("*")\
+                        .eq("user_id", user_id)\
+                        .ilike("content", f"%{word}%")\
+                        .limit(limit)\
+                        .execute()
+                    if res.data:
+                        results.extend(res.data)
+            
+            # Eliminar duplicats
+            unique = {r['id']: r for r in results}.values()
+            
+            if unique:
+                st.info(f"🔍 Trobats {len(unique)} records")
+                return list(unique)
             else:
-                st.warning("⚠️ No s'han trobat records a la BD")
+                st.warning("⚠️ Cap record trobat")
                 return []
         except Exception as e:
-            st.error(f"❌ ERROR CERCA RAG: {str(e)}")
+            st.error(f"❌ ERROR CERCA: {str(e)}")
             return []
 
-    # --- INICIALITZACIÓ CONVERSA ---
+    # --- INICIALITZACIÓ ---
     if st.session_state.conv_id is None:
         res = supabase.table("conversations").insert({
             "user_id": user_id, "title": "Nova conversa", "updated_at": datetime.now().isoformat()
@@ -69,10 +74,8 @@ def mostrar_xat():
         st.session_state.msgs = supabase.table("messages").select("*").eq("conversation_id", st.session_state.conv_id).order("created_at").execute().data
 
     # --- INTERFÍCIE ---
-    st.title("💬 Xat IA (Debug Actiu)")
-    st.caption(" Memòria: errors visibles + prova manual")
+    st.title("💬 Xat IA (Memòria Text)")
     
-    # Selector
     convs = supabase.table("conversations").select("*").eq("user_id", user_id).order("updated_at", desc=True).limit(10).execute().data
     if convs:
         col1, col2 = st.columns([3, 1])
@@ -87,12 +90,11 @@ def mostrar_xat():
 
     st.markdown("---")
     
-    # Botó de prova manual (CLAU)
-    if st.button("🧪 PROVAR MEMÒRIA MANUALMENT"):
-        test_facts = ["Tinc 30 anys", "El meu cabell és roig", "Vaig trencar el menisc fa un any"]
-        for f in test_facts:
-            save_memory(f)
-        st.info("Espera 2 segons i pregunta 'Quants anys tinc?' a dalt 👆")
+    # Botó de prova
+    if st.button("🧪 PROVAR MEMÒRIA"):
+        save_memory("Tinc 30 anys")
+        save_memory("El meu cabell és roig")
+        save_memory("Vaig trencar el menisc fa un any")
 
     col1, col2 = st.columns([4, 1])
     with col1: prompt = st.chat_input("Pregunta...")
@@ -115,16 +117,16 @@ def mostrar_xat():
         st.session_state.msgs.append({"role": "user", "content": prompt, "image_url": image_url})
         supabase.table("messages").insert({"conversation_id": st.session_state.conv_id, "role": "user", "content": prompt, "image_url": image_url}).execute()
         
-        # ✅ GUARDAR AUTOMÀTIC (Sense JSON complex, directe)
+        # Guardar com a record
         save_memory(prompt)
         
         with st.chat_message("assistant"):
-            with st.spinner("Consultant memòria i pensant..."):
-                memories = get_relevant_memories(prompt, limit=5)
+            with st.spinner("Pensant..."):
+                memories = search_memories(prompt, limit=5)
                 
-                context = "MEMÒRIA:\n" + "\n".join([f"- {m}" for m in memories]) if memories else "Cap memòria trobada."
+                context = "MEMÒRIA:\n" + "\n".join([f"- {m['content']}" for m in memories]) if memories else "Cap memòria."
                 
-                sys_msg = {"role": "system", "content": f"Ets un entrenador de running. {context} Respon en català. Si la memòria diu alguna dada, utilitza-la."}
+                sys_msg = {"role": "system", "content": f"Ets un entrenador de running. {context} Respon en català."}
                 history = [sys_msg] + st.session_state.msgs[-8:]
                 
                 try:
