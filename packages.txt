@@ -1,0 +1,11 @@
+# System packages for OCR
+tesseract-ocr
+tesseract-ocr-cat
+tesseract-ocr-spa
+tesseract-ocr-eng
+
+# Dependencies
+libtesseract-dev
+tesseract-ocr-eng
+tesseract-ocr-cat
+tesseract-ocr-spa
