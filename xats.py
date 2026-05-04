@@ -170,9 +170,10 @@ Escriu només la reformulació en català, sense explicacions."""
 
             query_emb = get_embedding(search_query)
 
+            # ✅ CANVI 1: threshold més baix (0.1 en lloc de 0.3)
             res = supabase.rpc("match_memories", {
                 "query_embedding": query_emb,
-                "match_threshold": 0.3,
+                "match_threshold": 0.1,  # ✅ MÉS BAIX: troba més memòries
                 "match_count": limit,
                 "p_user_id": user_id
             }).execute()
@@ -299,6 +300,9 @@ Escriu només la reformulació en català, sense explicacions."""
             "content": prompt,
             "image_url": image_url
         }).execute()
+
+        # ✅ CANVI 2: Guardar CADA missatge a memòria llarg termini
+        save_memory(f"Usuari: {prompt}")
 
         with st.chat_message("assistant"):
             with st.spinner("Consultant memòria i pensant..."):
