@@ -5,6 +5,7 @@ from datetime import datetime
 import uuid
 import pandas as pd
 import io
+from PIL import Image
 
 # --- EMBEDDINGS LOCALS ---
 @st.cache_resource
@@ -16,6 +17,20 @@ def get_embedding(text):
     model = load_embedding_model()
     emb = model.encode(text, normalize_embeddings=True)
     return emb.tolist()
+
+# --- OCR PER LLEGIR IMATGES ---
+def extract_text_from_image(image_file):
+    """Extreu text d'una imatge amb OCR (tesseract)"""
+    try:
+        import pytesseract
+        img = Image.open(image_file)
+        # Suporta català, castellà i anglès
+        text = pytesseract.image_to_string(img, lang='cat+spa+eng')
+        return text.strip() if text.strip() else "Imatge sense text detectable"
+    except ImportError:
+        return "⚠️ pytesseract no instal·lat. Afegeix-lo a requirements.txt"
+    except Exception as e:
+        return f"Error llegint imatge: {str(e)}"
 
 
 def mostrar_xat():
@@ -59,17 +74,13 @@ def mostrar_xat():
                 st.error("Format no suportat. Utilitza CSV o Excel")
                 return False
             
-            # Converteix el DataFrame a text estructurat
             data_summary = f"Dades del fitxer {uploaded_file.name}:\n"
             data_summary += f"Files: {len(df)}, Columnes: {', '.join(df.columns)}\n"
             data_summary += df.to_string(index=False)
             
-            # Guarda com a memòria
             save_memory(f"FITXER PUJAT: {uploaded_file.name} - {data_summary[:500]}...")
-            
             st.success(f"✅ Fitxer processat: {len(df)} files guardades com a memòria")
             return True
-            
         except Exception as e:
             st.error(f"❌ Error processant fitxer: {str(e)}")
             return False
@@ -173,7 +184,7 @@ Escriu només la reformulació en català, sense explicacions."""
         )
 
     st.title("💬 Xat IA - Entrenador de Running")
-    st.caption("Memòria intel·ligent activa: recordo el teu historial")
+    st.caption("Memòria intel·ligent activa: recordo el teu historial + llegeixo imatges 📸")
 
     convs = (
         supabase.table("conversations")
@@ -206,7 +217,6 @@ Escriu només la reformulació en català, sense explicacions."""
 
     st.markdown("---")
     
-    # Botons de prova
     col_test1, col_test2 = st.columns(2)
     with col_test1:
         if st.button("🧪 Provar Memòria"):
@@ -216,9 +226,8 @@ Escriu només la reformulació en català, sense explicacions."""
     with col_test2:
         if st.button("📊 Veure Estadístiques"):
             total_mem = supabase.table("long_term_memories").select("*", count="exact").eq("user_id", user_id).execute()
-            st.metric("Total memòries", total_mem.count)
+            st.metric("Total memòries", total_mem.count if hasattr(total_mem, 'count') else 0)
 
-    # Input + Uploads múltiples
     st.markdown("### 📎 Adjuntar fitxers")
     col1, col2, col3 = st.columns([3, 1, 1])
     
@@ -231,11 +240,22 @@ Escriu només la reformulació en català, sense explicacions."""
     with col3:
         uploaded_file = st.file_uploader("CSV/Excel", type=["csv", "xlsx", "xls"], label_visibility="collapsed")
 
-    # Processar fitxer CSV/Excel
+    # Processar CSV/Excel
     if uploaded_file:
         with st.spinner(f"📊 Processant {uploaded_file.name}..."):
             if process_uploaded_file(uploaded_file):
                 st.success("✅ Dades guardades a la memòria!")
+
+    # Processar IMATGE amb OCR 🆕
+    if uploaded_image:
+        with st.spinner("🔍 Llegint text de la imatge..."):
+            ocr_text = extract_text_from_image(uploaded_image)
+            if ocr_text and "Error" not in ocr_text and "⚠️" not in ocr_text:
+                # Guarda el text extret com a memòria
+                save_memory(f"IMATGE PUJADA (OCR): {ocr_text}")
+                st.info(f"📄 Text detectat: {ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}")
+            else:
+                st.warning(f"⚠️ {ocr_text}")
 
     # Mostrar missatges
     for m in st.session_state.msgs:
@@ -247,7 +267,7 @@ Escriu només la reformulació en català, sense explicacions."""
     if prompt:
         image_url = None
         
-        # Pujar imatge
+        # Pujar imatge a Storage
         if uploaded_image:
             with st.spinner("Pujant imatge..."):
                 ext = uploaded_image.name.split('.')[-1]
@@ -281,6 +301,7 @@ Escriu només la reformulació en català, sense explicacions."""
                         "Utilitza aquest historial per personalitzar les respostes. "
                         "Si hi ha dates, raona temporalment (p.ex. 'fa 3 mesos deies que...'). "
                         "Si l'historial conté dades rellevants per a la pregunta, utilitza-les SEMPRE. "
+                        "Si l'usuari ha pujat una imatge amb text, el text ja està guardat a l'historial. "
                         "Respon sempre en català."
                     )
                 }
