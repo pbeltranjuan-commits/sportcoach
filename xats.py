@@ -157,7 +157,7 @@ Escriu només la reformulació en català, sense explicacions."""
                 "p_user_id": user_id
             }).execute()
 
-            if res.
+            if res.data:  # ✅ CORREGIT
                 memories = [row["content"] for row in res.data]
                 
         except Exception as e:
@@ -173,7 +173,7 @@ Escriu només la reformulació en català, sense explicacions."""
                         "user_id", user_id
                     ).ilike("content", f"%{word}%").limit(limit).execute()
                     
-                    if res.
+                    if res.data:  # ✅ CORREGIT
                         memories.extend([row["content"] for row in res.data])
                         break  # Només agafem el primer resultat
                 
@@ -238,7 +238,7 @@ Escriu només la reformulació en català, sense explicacions."""
     with col_test3:
         if st.button("📋 Veure memòries"):
             all_mems = supabase.table("long_term_memories").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(10).execute()
-            if all_mems.
+            if all_mems.data:  # ✅ CORREGIT
                 for mem in all_mems.data:
                     st.text_area(f"📅 {mem['created_at'][:10]}", mem['content'], height=80)
             else:
