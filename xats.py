@@ -85,32 +85,40 @@ def mostrar_xat():
             return False
 
     def extract_and_save_memories(user_message, assistant_response):
+        """Versió simplificada i amb DEBUG"""
         try:
             extraction = client.chat.completions.create(
                 model="qwen-turbo",
                 messages=[{
                     "role": "user",
-                    "content": f"""Analitza aquesta conversa i extreu NOMÉS fets rellevants sobre l'usuari
-(estat físic, lesions, cansament, objectius, hàbits de running, emocions importants, edat, pes, característiques personals, vehicle, multes).
-Si no hi ha res rellevant, respon exactament: CAP
+                    "content": f"""Extreu NOMÉS fets personals rellevants (edat, vehicle, lesions, objectius, dades físiques).
+Si no hi ha cap fet, respon "CAP".
+Si n'hi ha, respon amb una llista separada per comes.
 
-Usuari: {user_message}
-Assistent: {assistant_response}
+Exemple: "Tinc 32 anys" -> "32 anys"
+Exemple: "Vull córrer" -> "Objectiu: córrer"
 
-Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
+Text a analitzar:
+{user_message}
+"""
                 }],
                 temperature=0,
-                max_tokens=200
+                max_tokens=100
             )
-            content = extraction.choices[0].message.content
-            if not content:
-                return
-            facts_text = content.strip()
-            if facts_text.upper() != "CAP":
-                for fact in facts_text.split("\n"):
-                    fact = fact.strip("- ").strip()
+            
+            content = extraction.choices[0].message.content.strip()
+            
+            # DEBUG: Mostrar què ha detectat la IA
+            st.info(f"🔍 IA detecta fets: '{content}'")
+
+            if content.upper() != "CAP" and content:
+                # Separar per comes o salts de línia
+                facts = [f.strip() for f in content.replace(',', '\n').split('\n') if f.strip()]
+                for fact in facts:
                     if fact:
                         save_memory(fact)
+                        st.success(f"💾 Guardat: {fact}")
+                
         except Exception as e:
             st.error(f"❌ Error extracció memòria: {str(e)}")
 
@@ -125,7 +133,7 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
                 "user_id", user_id
             ).order("created_at", desc=True).limit(limit).execute()
             
-            if all_memories.data:  # ✅ CORRECCIÓ DE SINTAXI AQUÍ
+            if all_memories.data:
                 memories = [row["content"] for row in all_memories.data]
                 st.info(f"📚 Carregades {len(memories)} memòries de la BD")
                 return memories
@@ -194,7 +202,7 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
     # Botons de gestió
     col_test1, col_test2, col_test3 = st.columns(3)
     with col_test1:
-        if st.button("🧪 Provar Memòria"):
+        if st.button(" Provar Memòria"):
             save_memory("Tinc 32 anys")
             save_memory("El meu cotxe és un Toyota amb matrícula ABC-1234")
             st.info("✅ Memòries de prova guardades!")
@@ -203,21 +211,20 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
             total_mem = supabase.table("long_term_memories").select("*", count="exact").eq("user_id", user_id).execute()
             st.metric("Total memòries", total_mem.count if hasattr(total_mem, 'count') else 0)
     with col_test3:
-        # ✅ CORRECCIÓ DE SINTAXI I KEYS
         if st.button("📋 Veure memòries"):
             all_mems = supabase.table("long_term_memories").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(20).execute()
             if all_mems.data:
                 for i, mem in enumerate(all_mems.data):
                     st.text_area(
-                        f"📅 {mem['created_at'][:10]}", 
+                        f" {mem['created_at'][:10]}", 
                         mem['content'], 
                         height=80,
-                        key=f"mem_{i}_{mem.get('id', i)}"  # KEY ÚNICA
+                        key=f"mem_{i}_{mem.get('id', i)}"
                     )
             else:
                 st.info("Cap memòria guardada encara")
 
-    st.markdown("### 📎 Adjuntar fitxers")
+    st.markdown("###  Adjuntar fitxers")
     col1, col2, col3 = st.columns([3, 1, 1])
     
     with col1:
@@ -275,65 +282,67 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
             "image_url": image_url
         }).execute()
 
-        with st.chat_message("assistant"):
-            with st.spinner("Consultant memòria i pensant..."):
-                
-                # 🔍 CARREGAR TOTES LES MEMÒRIES (solució per recordar sempre l'última dada)
-                memories = get_relevant_memories(prompt, limit=50)
+        # 🔍 CARREGAR TOTES LES MEMÒRIES
+        memories = get_relevant_memories(prompt, limit=50)
 
-                if memories:
-                    # Construir context amb prioritat per dades recents
-                    context = "HISTORIAL COMPLET DE L'USUARI (dades més recents primer):\n\n"
-                    for i, m in enumerate(memories):
-                        context += f"{i+1}. {m}\n"
-                    
-                    #  DEBUG: mostra quines dades s'envien a la IA
-                    with st.expander("️ Veure dades que rep la IA"):
-                        st.text(context[:2000])
-                else:
-                    context = "No hi ha historial previ de l'usuari."
+        if memories:
+            context = "HISTORIAL COMPLET DE L'USUARI (dades més recents primer):\n\n"
+            for i, m in enumerate(memories):
+                context += f"{i+1}. {m}\n"
+            
+            with st.expander("👁️ Veure dades que rep la IA"):
+                st.text(context[:2000])
+        else:
+            context = "No hi ha historial previ de l'usuari."
 
-                # System prompt OPTIMITZAT
-                sys_msg = {
-                    "role": "system",
-                    "content": (
-                        "Ets un assistent personal expert. "
-                        f"Tens accés a l'historial COMPLET de l'usuari:\n\n{context}\n\n"
-                        "INSTRUCCIONS CRÍTIQUES:\n"
-                        "1. LLEGEIX atentament TOTES les dades de dalt. Les primeres són les més recents.\n"
-                        "2. Si hi ha dades CONTRADICTÒRIES (ex: '30 anys' i '32 anys'), UTILITZA LA MÉS RECENT (la que apareix primer).\n"
-                        "3. Si l'usuari pregunta per 'cotxe', 'matrícula', 'multa', 'anys', 'cabell', etc., BUSCA AQUESTES PARAULES a l'historial.\n"
-                        "4. Si trobes la informació, RESPON UTILITZANT LES DADES CONCRETES de l'historial.\n"
-                        "5. Cita la font: 'Segons les teves dades guardades el [data]...'\n"
-                        "6. Si no hi ha informació rellevant, digues 'No tinc aquesta informació guardada'.\n"
-                        "7. Respon sempre en català, de forma clara i directa."
-                    )
-                }
-                
-                # Historial recent del xat actual
-                history = [sys_msg] + [
-                    {"role": m["role"], "content": m["content"]}
-                    for m in st.session_state.msgs[-8:]
-                ]
+        sys_msg = {
+            "role": "system",
+            "content": (
+                "Ets un assistent personal expert. "
+                f"Tens accés a l'historial COMPLET de l'usuari:\n\n{context}\n\n"
+                "INSTRUCCIONS CRÍTIQUES:\n"
+                "1. LLEGEIX atentament TOTES les dades de dalt. Les primeres són les més recents.\n"
+                "2. Si hi ha dades CONTRADICTÒRIES (ex: '30 anys' i '32 anys'), UTILITZA LA MÉS RECENT (la que apareix primer).\n"
+                "3. Si l'usuari pregunta per 'cotxe', 'matrícula', 'multa', 'anys', 'cabell', etc., BUSCA AQUESTES PARAULES a l'historial.\n"
+                "4. Si trobes la informació, RESPON UTILITZANT LES DADES CONCRETES de l'historial.\n"
+                "5. Cita la font: 'Segons les teves dades guardades el [data]...'\n"
+                "6. Si no hi ha informació rellevant, digues 'No tinc aquesta informació guardada'.\n"
+                "7. Respon sempre en català, de forma clara i directa."
+            )
+        }
+        
+        history = [sys_msg] + [
+            {"role": m["role"], "content": m["content"]}
+            for m in st.session_state.msgs[-8:]
+        ]
 
-                try:
-                    res = client.chat.completions.create(
-                        model="qwen-turbo",
-                        messages=history,
-                        temperature=0.3  # Més determinista per seguir instruccions
-                    )
-                    ans = res.choices[0].message.content
-                    st.markdown(ans)
-                    
-                    st.session_state.msgs.append({"role": "assistant", "content": ans, "image_url": None})
-                    supabase.table("messages").insert({
-                        "conversation_id": st.session_state.conv_id,
-                        "role": "assistant",
-                        "content": ans
-                    }).execute()
-                    
-                    # Extracció automàtica de nous fets
-                    extract_and_save_memories(prompt, ans)
-                    
-                except Exception as e:
-                    st.error(f"❌ ERROR IA: {str(e)}")
+        try:
+            res = client.chat.completions.create(
+                model="qwen-turbo",
+                messages=history,
+                temperature=0.3
+            )
+            ans = res.choices[0].message.content
+            st.markdown(ans)
+            
+            st.session_state.msgs.append({"role": "assistant", "content": ans, "image_url": None})
+            supabase.table("messages").insert({
+                "conversation_id": st.session_state.conv_id,
+                "role": "assistant",
+                "content": ans
+            }).execute()
+            
+            # Intentar extreure memòries (amb el debug ara visible)
+            extract_and_save_memories(prompt, ans)
+            
+        except Exception as e:
+            st.error(f"❌ ERROR IA: {str(e)}")
+
+    # =====================================================
+    # BOTÓ EXTRA PER FORÇAR GUARDAR (DEBUG)
+    # =====================================================
+    if prompt:
+        if st.button("💾 Forçar guardar text actual com a memòria"):
+            save_memory(prompt)
+            st.success("✅ Text guardat manualment!")
+            st.rerun()
