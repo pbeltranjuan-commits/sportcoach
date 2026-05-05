@@ -16,6 +16,18 @@ def get_embedding(text):
     emb = model.encode(text, normalize_embeddings=True)
     return emb.tolist()
 
+# --- OCR: LLEGIR TEXT DE IMATGES ---
+def extract_text_from_image(image_bytes):
+    try:
+        import pytesseract
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(image_bytes))
+        text = pytesseract.image_to_string(img, lang='cat+spa+eng')
+        return text.strip() if text.strip() else None
+    except Exception as e:
+        return None
+
 
 def mostrar_xat():
     if 'user' not in st.session_state or st.session_state.user is None:
@@ -45,35 +57,6 @@ def mostrar_xat():
         except Exception as e:
             st.error(f"❌ ERROR GUARDANT MEMÒRIA: {str(e)}")
             return False
-
-    # --- ANALITZAR IMATGE AMB URL PÚBLICA ---
-    def analyze_image_and_save(image_url):
-        try:
-            response = client.chat.completions.create(
-                model="qwen-turbo",
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": image_url}
-                        },
-                        {
-                            "type": "text",
-                            "text": "Descriu aquesta imatge en detall. Si conté dades d'entrenament, running, salut o resultats esportius, extreu tota la informació numèrica i rellevant. Respon en català."
-                        }
-                    ]
-                }],
-                max_tokens=500
-            )
-            description = response.choices[0].message.content
-            if description:
-                save_memory(f"IMATGE ANALITZADA: {description}")
-                return description
-            return None
-        except Exception as e:
-            st.warning(f"⚠️ No s'ha pogut analitzar la imatge: {str(e)}")
-            return None
 
     # --- PROCESSAR CSV/EXCEL ---
     def process_file_and_save(uploaded_file):
@@ -228,24 +211,30 @@ Escriu només la reformulació en català, sense explicacions."""
                 st.success(f"✅ Fitxer guardat a memòria ({len(df)} files)")
                 st.dataframe(df.head(5))
 
-    # Processar imatge: pujar a Storage primer, després analitzar amb URL
-    pending_image_url = None
+    # Processar imatge amb OCR
+    ocr_context = None
     if uploaded_image:
-        with st.spinner("📤 Pujant imatge..."):
-            try:
-                ext = uploaded_image.name.split('.')[-1]
-                fn = f"{user_id}/{st.session_state.conv_id}/{uuid.uuid4()}.{ext}"
-                supabase.storage.from_("chat-images").upload(fn, uploaded_image.getvalue())
-                pending_image_url = supabase.storage.from_("chat-images").get_public_url(fn)
-                st.image(uploaded_image, width=200)
-
-                with st.spinner("🔍 Analitzant imatge..."):
-                    description = analyze_image_and_save(pending_image_url)
-                    if description:
-                        st.success("✅ Imatge analitzada i guardada a memòria")
-                        st.info(f"📄 {description[:200]}...")
-            except Exception as e:
-                st.error(f"❌ Error pujant imatge: {str(e)}")
+        st.image(uploaded_image, width=250)
+        with st.spinner("🔍 Llegint text de la imatge..."):
+            ocr_text = extract_text_from_image(uploaded_image.getvalue())
+            if ocr_text:
+                save_memory(f"IMATGE OCR: {ocr_text[:600]}")
+                st.success("✅ Text de la imatge guardat a memòria")
+                st.info(f"📄 Text detectat: {ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}")
+                ocr_context = ocr_text
+            else:
+                st.info("ℹ️ La imatge no conté text llegible — guardada sense OCR")
+                # Pujar igualment a storage per mostrar-la al chat
+        # Pujar a storage
+        try:
+            ext = uploaded_image.name.split('.')[-1]
+            fn = f"{user_id}/{st.session_state.conv_id}/{uuid.uuid4()}.{ext}"
+            supabase.storage.from_("chat-images").upload(fn, uploaded_image.getvalue())
+            pending_image_url = supabase.storage.from_("chat-images").get_public_url(fn)
+        except Exception:
+            pending_image_url = None
+    else:
+        pending_image_url = None
 
     # Mostrar historial
     for m in st.session_state.msgs:
@@ -257,6 +246,11 @@ Escriu només la reformulació en català, sense explicacions."""
     # --- PROCESSAMENT DEL MISSATGE ---
     if prompt:
         image_url = pending_image_url
+
+        # Afegir context OCR al prompt si n'hi ha
+        prompt_with_ocr = prompt
+        if ocr_context:
+            prompt_with_ocr = f"{prompt}\n\n[Text de la imatge adjunta: {ocr_context[:400]}]"
 
         # Guardar missatge a SQL
         st.session_state.msgs.append({"role": "user", "content": prompt, "image_url": image_url})
@@ -292,7 +286,7 @@ Escriu només la reformulació en català, sense explicacions."""
                     )
                 }
                 history = [sys_msg] + [
-                    {"role": m["role"], "content": m["content"]}
+                    {"role": m["role"], "content": m["content"] if m["content"] != prompt else prompt_with_ocr}
                     for m in st.session_state.msgs[-8:]
                 ]
 
