@@ -32,7 +32,7 @@ def mostrar_xat():
     if 'msgs' not in st.session_state:
         st.session_state.msgs = []
 
-    # --- GUARDAR MEMÒRIA (amb data + embedding local) ---
+    # --- GUARDAR MEMÒRIA ---
     def save_memory(content_text):
         try:
             dated_content = f"[{datetime.now().strftime('%Y-%m-%d')}] {content_text}"
@@ -47,7 +47,7 @@ def mostrar_xat():
             st.error(f"❌ ERROR GUARDANT MEMÒRIA: {str(e)}")
             return False
 
-    # --- EXTRACCIÓ INTEL·LIGENT: només guarda fets rellevants ---
+    # --- EXTRACCIÓ INTEL·LIGENT ---
     def extract_and_save_memories(user_message, assistant_response):
         try:
             extraction = client.chat.completions.create(
@@ -120,7 +120,6 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
             else:
                 st.error("Format no suportat")
                 return None
-
             summary = (
                 f"Fitxer '{uploaded_file.name}': "
                 f"{len(df)} files, columnes: {', '.join(df.columns.tolist())}. "
@@ -142,7 +141,7 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
         "lesión", "pelo", "peso", "altura", "objetivo", "cansado", "horas"
     ]
 
-    # --- CERCA RAG AMB QUERY EXPANSION ---
+    # --- CERCA RAG ---
     def get_relevant_memories(query_text, limit=5):
         try:
             query_lower = query_text.lower()
@@ -169,11 +168,9 @@ Escriu només la reformulació en català, sense explicacions."""
                     search_query = query_text
 
             query_emb = get_embedding(search_query)
-
-            # ✅ CANVI 1: threshold més baix (0.1 en lloc de 0.3)
             res = supabase.rpc("match_memories", {
                 "query_embedding": query_emb,
-                "match_threshold": 0.1,  # ✅ MÉS BAIX: troba més memòries
+                "match_threshold": 0.3,
                 "match_count": limit,
                 "p_user_id": user_id
             }).execute()
@@ -209,7 +206,6 @@ Escriu només la reformulació en català, sense explicacions."""
     st.title("💬 Xat IA - El teu Entrenador Virtual")
     st.caption("Memòria intel·ligent activa: recordo el teu historial")
 
-    # Selector de converses
     convs = (
         supabase.table("conversations")
         .select("*")
@@ -241,14 +237,13 @@ Escriu només la reformulació en català, sense explicacions."""
 
     st.markdown("---")
 
-    # Botó de prova manual
     if st.button("🧪 PROVAR MEMÒRIA MANUALMENT"):
         test_facts = ["Tinc 30 anys", "El meu cabell és roig", "Vaig trencar el menisc fa un any"]
         for f in test_facts:
             save_memory(f)
         st.info("Memòries de prova guardades! Pregunta 'Soc vell?' o 'Quants anys tinc?' per verificar.")
 
-    # --- ADJUNTS ---
+    # --- ADJUNTS I INPUT ---
     col1, col2, col3 = st.columns([4, 1, 1])
     with col1:
         prompt = st.chat_input("Pregunta...")
@@ -257,7 +252,7 @@ Escriu només la reformulació en català, sense explicacions."""
     with col3:
         uploaded_file = st.file_uploader("📊", type=["csv", "xlsx", "xls"], label_visibility="collapsed")
 
-    # Processar CSV/Excel quan es puja
+    # Processar CSV/Excel
     if uploaded_file:
         with st.spinner(f"📊 Processant {uploaded_file.name}..."):
             df = process_file_and_save(uploaded_file)
@@ -265,13 +260,12 @@ Escriu només la reformulació en català, sense explicacions."""
                 st.success(f"✅ Fitxer guardat a memòria ({len(df)} files)")
                 st.dataframe(df.head(5))
 
-    # Processar imatge quan es puja
+    # Processar imatge
     if uploaded_image:
         with st.spinner("🔍 Analitzant imatge..."):
-            description = analyze_image_and_save(
-                uploaded_image.getvalue(),
-                mime_type=f"image/{uploaded_image.name.split('.')[-1].lower()}"
-            )
+            ext = uploaded_image.name.split('.')[-1].lower()
+            mime = f"image/{'jpeg' if ext == 'jpg' else ext}"
+            description = analyze_image_and_save(uploaded_image.getvalue(), mime_type=mime)
             if description:
                 st.success("✅ Imatge analitzada i guardada a memòria")
                 st.info(f"📄 {description[:200]}...")
@@ -300,9 +294,6 @@ Escriu només la reformulació en català, sense explicacions."""
             "content": prompt,
             "image_url": image_url
         }).execute()
-
-        # ✅ CANVI 2: Guardar CADA missatge a memòria llarg termini
-        save_memory(f"Usuari: {prompt}")
 
         with st.chat_message("assistant"):
             with st.spinner("Consultant memòria i pensant..."):
