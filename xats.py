@@ -32,7 +32,7 @@ def mostrar_xat():
     if 'msgs' not in st.session_state:
         st.session_state.msgs = []
 
-    # --- GUARDAR MEMÒRIA ---
+    # --- GUARDAR MEMÒRIA (sempre, amb data) ---
     def save_memory(content_text):
         try:
             dated_content = f"[{datetime.now().strftime('%Y-%m-%d')}] {content_text}"
@@ -46,37 +46,6 @@ def mostrar_xat():
         except Exception as e:
             st.error(f"❌ ERROR GUARDANT MEMÒRIA: {str(e)}")
             return False
-
-    # --- EXTRACCIÓ INTEL·LIGENT ---
-    def extract_and_save_memories(user_message, assistant_response):
-        try:
-            extraction = client.chat.completions.create(
-                model="qwen-turbo",
-                messages=[{
-                    "role": "user",
-                    "content": f"""Analitza aquesta conversa i extreu NOMÉS fets rellevants sobre l'usuari
-(estat físic, lesions, cansament, objectius, hàbits de running, emocions importants, edat, pes, característiques personals).
-Si no hi ha res rellevant, respon exactament: CAP
-
-Usuari: {user_message}
-Assistent: {assistant_response}
-
-Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
-                }],
-                temperature=0,
-                max_tokens=200
-            )
-            content = extraction.choices[0].message.content
-            if not content:
-                return
-            facts_text = content.strip()
-            if facts_text.upper() != "CAP":
-                for fact in facts_text.split("\n"):
-                    fact = fact.strip("- ").strip()
-                    if fact:
-                        save_memory(fact)
-        except Exception as e:
-            st.error(f"❌ Error extracció memòria: {str(e)}")
 
     # --- ANALITZAR IMATGE AMB IA ---
     def analyze_image_and_save(image_bytes, mime_type="image/jpeg"):
@@ -138,24 +107,25 @@ Respon amb una llista de fets, un per línia, sense guions ni explicacions."""
         "objectiu", "hàbit", "cansament", "cansat", "fatigat", "son", "dormir",
         "hores", "qualitat", "motivació", "sensació", "entrenament",
         "viejo", "joven", "edad", "años", "quién soy", "cómo estoy",
-        "lesión", "pelo", "peso", "altura", "objetivo", "cansado", "horas"
+        "lesión", "pelo", "peso", "altura", "objetivo", "cansado", "horas",
+        "recordes", "recuerdas", "vas dir", "dijiste", "fa temps", "antes"
     ]
 
     # --- CERCA RAG ---
-    def get_relevant_memories(query_text, limit=5):
+    def get_relevant_memories(query_text, limit=6):
         try:
             query_lower = query_text.lower()
             is_personal = any(kw in query_lower for kw in PERSONAL_KEYWORDS)
 
             if is_personal:
-                search_query = "edat anys lesions estat físic característiques personals objectius son hores fatiga motivació de l'usuari"
+                search_query = "edat anys lesions estat físic característiques personals objectius son hores fatiga motivació conversa anterior usuari"
             else:
                 try:
                     expanded = client.chat.completions.create(
                         model="qwen-turbo",
                         messages=[{
                             "role": "user",
-                            "content": f"""Reformula aquesta pregunta per buscar informació personal d'un usuari (edat, lesions, estat físic, objectius, hàbits, emocions, dades d'entrenament).
+                            "content": f"""Reformula aquesta pregunta per buscar informació personal d'un usuari (edat, lesions, estat físic, objectius, hàbits, emocions, dades d'entrenament, converses anteriors).
 Pregunta: {query_text}
 Escriu només la reformulació en català, sense explicacions."""
                         }],
@@ -204,7 +174,7 @@ Escriu només la reformulació en català, sense explicacions."""
 
     # --- INTERFÍCIE ---
     st.title("💬 Xat IA - El teu Entrenador Virtual")
-    st.caption("Memòria intel·ligent activa: recordo el teu historial")
+    st.caption("Memòria intel·ligent activa: recordo totes les teves converses")
 
     convs = (
         supabase.table("conversations")
@@ -287,6 +257,7 @@ Escriu només la reformulació en català, sense explicacions."""
                 supabase.storage.from_("chat-images").upload(fn, uploaded_image.getvalue())
                 image_url = supabase.storage.from_("chat-images").get_public_url(fn)
 
+        # Guardar missatge a SQL
         st.session_state.msgs.append({"role": "user", "content": prompt, "image_url": image_url})
         supabase.table("messages").insert({
             "conversation_id": st.session_state.conv_id,
@@ -295,9 +266,12 @@ Escriu només la reformulació en català, sense explicacions."""
             "image_url": image_url
         }).execute()
 
+        # ✅ GUARDAR SEMPRE A MEMÒRIA LLARG TERMINI (sense dependre de Qwen)
+        save_memory(prompt)
+
         with st.chat_message("assistant"):
             with st.spinner("Consultant memòria i pensant..."):
-                memories = get_relevant_memories(prompt, limit=5)
+                memories = get_relevant_memories(prompt, limit=6)
 
                 if memories:
                     context = "HISTORIAL DE L'USUARI (amb dates):\n" + "\n".join([f"- {m}" for m in memories])
@@ -308,11 +282,12 @@ Escriu només la reformulació en català, sense explicacions."""
                     "role": "system",
                     "content": (
                         "Ets un entrenador virtual personal especialitzat en running. "
-                        f"Tens accés a l'historial de l'usuari:\n\n{context}\n\n"
-                        "Utilitza aquest historial per personalitzar les respostes. "
-                        "Si hi ha dates, raona temporalment (p.ex. 'fa 3 mesos deies que...'). "
-                        "Si l'historial conté dades rellevants per a la pregunta, utilitza-les SEMPRE. "
-                        "Respon sempre en català."
+                        f"Tens accés a l'historial complet de l'usuari:\n\n{context}\n\n"
+                        "INSTRUCCIONS IMPORTANTS:\n"
+                        "1. Si l'historial conté dades rellevants per a la pregunta, utilitza-les SEMPRE.\n"
+                        "2. Si hi ha dates, raona temporalment (p.ex. 'fa 3 mesos deies que...').\n"
+                        "3. Si l'usuari et diu alguna dada personal (edat, pes, lesió...), confirma que ho has registrat.\n"
+                        "4. Respon sempre en català."
                     )
                 }
                 history = [sys_msg] + [
@@ -329,6 +304,7 @@ Escriu només la reformulació en català, sense explicacions."""
                     ans = res.choices[0].message.content
                     st.markdown(ans)
 
+                    # Guardar resposta a SQL
                     st.session_state.msgs.append({"role": "assistant", "content": ans, "image_url": None})
                     supabase.table("messages").insert({
                         "conversation_id": st.session_state.conv_id,
@@ -336,7 +312,8 @@ Escriu només la reformulació en català, sense explicacions."""
                         "content": ans
                     }).execute()
 
-                    extract_and_save_memories(prompt, ans)
+                    # Guardar també la resposta a memòria
+                    save_memory(f"Entrenador: {ans[:300]}")
 
                 except Exception as e:
                     st.error(f"❌ ERROR IA: {str(e)}")
