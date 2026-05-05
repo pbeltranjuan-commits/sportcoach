@@ -4,6 +4,9 @@ from openai import OpenAI
 from datetime import datetime
 import uuid
 import base64
+import google.generativeai as genai
+from PIL import Image
+import io
 
 
 # --- EMBEDDINGS LOCALS ---
@@ -18,37 +21,26 @@ def get_embedding(text):
     return emb.tolist()
 
 
-# --- OCR AMB VISION API (en comptes de pytesseract) ---
-def extract_text_from_image_vision(image_bytes, client):
+# --- OCR AMB GEMINI VISION ---
+def extract_text_from_image_vision(image_bytes):
     try:
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
-        response = client.chat.completions.create(
-            model="qwen-vl-plus",  # model vision, canvia si el teu és diferent
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "Extreu i transcriu TOT el text que veus en aquesta imatge. "
-                            "Inclou tots els números, valors, dates, etiquetes i unitats. "
-                            "Si és una captura d'una app esportiva (Garmin, Polar, Apple Health, etc.), "
-                            "extreu les mètriques: HRV, FC, VO2max, distància, ritme, etc. "
-                            "Respon NOMÉS amb el text extret, sense explicacions."
-                        )
-                    }
-                ]
-            }],
-            max_tokens=500
-        )
-        text = response.choices[0].message.content
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        img = Image.open(io.BytesIO(image_bytes))
+        response = model.generate_content([
+            img,
+            (
+                "Extreu i transcriu TOT el text que veus en aquesta imatge. "
+                "Inclou tots els números, valors, dates, etiquetes i unitats. "
+                "Si és una captura d'una app esportiva (Garmin, Polar, Apple Health, Wahoo, etc.), "
+                "extreu les mètriques: HRV, FC, VO2max, distància, ritme, calories, son, etc. "
+                "Respon NOMÉS amb el text extret, sense explicacions."
+            )
+        ])
+        text = response.text
         return text.strip() if text and text.strip() else None
     except Exception as e:
-        st.warning(f"⚠️ Vision API error: {str(e)}")
+        st.warning(f"⚠️ Gemini Vision error: {str(e)}")
         return None
 
 
@@ -247,7 +239,7 @@ Escriu només la reformulació en català, sense explicacions."""
         st.image(uploaded_image, width=250)
 
         with st.spinner("🔍 Analitzant imatge amb IA..."):
-            ocr_text = extract_text_from_image_vision(img_bytes, client)
+            ocr_text = extract_text_from_image_vision(img_bytes)
 
         if ocr_text:
             # Guardar a memòria immediatament
