@@ -3,7 +3,6 @@ from database import get_db
 from openai import OpenAI
 from datetime import datetime
 import uuid
-import base64
 
 
 # --- EMBEDDINGS LOCALS (sense OpenAI) ---
@@ -32,7 +31,7 @@ def mostrar_xat():
     if 'msgs' not in st.session_state:
         st.session_state.msgs = []
 
-    # --- GUARDAR MEMÒRIA (sempre, amb data) ---
+    # --- GUARDAR MEMÒRIA ---
     def save_memory(content_text):
         try:
             dated_content = f"[{datetime.now().strftime('%Y-%m-%d')}] {content_text}"
@@ -47,10 +46,9 @@ def mostrar_xat():
             st.error(f"❌ ERROR GUARDANT MEMÒRIA: {str(e)}")
             return False
 
-    # --- ANALITZAR IMATGE AMB IA ---
-    def analyze_image_and_save(image_bytes, mime_type="image/jpeg"):
+    # --- ANALITZAR IMATGE AMB URL PÚBLICA ---
+    def analyze_image_and_save(image_url):
         try:
-            b64 = base64.b64encode(image_bytes).decode("utf-8")
             response = client.chat.completions.create(
                 model="qwen-turbo",
                 messages=[{
@@ -58,7 +56,7 @@ def mostrar_xat():
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:{mime_type};base64,{b64}"}
+                            "image_url": {"url": image_url}
                         },
                         {
                             "type": "text",
@@ -125,7 +123,7 @@ def mostrar_xat():
                         model="qwen-turbo",
                         messages=[{
                             "role": "user",
-                            "content": f"""Reformula aquesta pregunta per buscar informació personal d'un usuari (edat, lesions, estat físic, objectius, hàbits, emocions, dades d'entrenament, converses anteriors).
+                            "content": f"""Reformula aquesta pregunta per buscar informació personal d'un usuari (edat, lesions, estat físic, objectius, hàbits, emocions, dades d'entrenament).
 Pregunta: {query_text}
 Escriu només la reformulació en català, sense explicacions."""
                         }],
@@ -230,15 +228,24 @@ Escriu només la reformulació en català, sense explicacions."""
                 st.success(f"✅ Fitxer guardat a memòria ({len(df)} files)")
                 st.dataframe(df.head(5))
 
-    # Processar imatge
+    # Processar imatge: pujar a Storage primer, després analitzar amb URL
+    pending_image_url = None
     if uploaded_image:
-        with st.spinner("🔍 Analitzant imatge..."):
-            ext = uploaded_image.name.split('.')[-1].lower()
-            mime = f"image/{'jpeg' if ext == 'jpg' else ext}"
-            description = analyze_image_and_save(uploaded_image.getvalue(), mime_type=mime)
-            if description:
-                st.success("✅ Imatge analitzada i guardada a memòria")
-                st.info(f"📄 {description[:200]}...")
+        with st.spinner("📤 Pujant imatge..."):
+            try:
+                ext = uploaded_image.name.split('.')[-1]
+                fn = f"{user_id}/{st.session_state.conv_id}/{uuid.uuid4()}.{ext}"
+                supabase.storage.from_("chat-images").upload(fn, uploaded_image.getvalue())
+                pending_image_url = supabase.storage.from_("chat-images").get_public_url(fn)
+                st.image(uploaded_image, width=200)
+
+                with st.spinner("🔍 Analitzant imatge..."):
+                    description = analyze_image_and_save(pending_image_url)
+                    if description:
+                        st.success("✅ Imatge analitzada i guardada a memòria")
+                        st.info(f"📄 {description[:200]}...")
+            except Exception as e:
+                st.error(f"❌ Error pujant imatge: {str(e)}")
 
     # Mostrar historial
     for m in st.session_state.msgs:
@@ -249,13 +256,7 @@ Escriu només la reformulació en català, sense explicacions."""
 
     # --- PROCESSAMENT DEL MISSATGE ---
     if prompt:
-        image_url = None
-        if uploaded_image:
-            with st.spinner("Pujant imatge..."):
-                ext = uploaded_image.name.split('.')[-1]
-                fn = f"{user_id}/{st.session_state.conv_id}/{uuid.uuid4()}.{ext}"
-                supabase.storage.from_("chat-images").upload(fn, uploaded_image.getvalue())
-                image_url = supabase.storage.from_("chat-images").get_public_url(fn)
+        image_url = pending_image_url
 
         # Guardar missatge a SQL
         st.session_state.msgs.append({"role": "user", "content": prompt, "image_url": image_url})
@@ -266,7 +267,7 @@ Escriu només la reformulació en català, sense explicacions."""
             "image_url": image_url
         }).execute()
 
-        # ✅ GUARDAR SEMPRE A MEMÒRIA LLARG TERMINI (sense dependre de Qwen)
+        # Guardar sempre a memòria llarg termini
         save_memory(prompt)
 
         with st.chat_message("assistant"):
@@ -304,7 +305,6 @@ Escriu només la reformulació en català, sense explicacions."""
                     ans = res.choices[0].message.content
                     st.markdown(ans)
 
-                    # Guardar resposta a SQL
                     st.session_state.msgs.append({"role": "assistant", "content": ans, "image_url": None})
                     supabase.table("messages").insert({
                         "conversation_id": st.session_state.conv_id,
@@ -312,7 +312,6 @@ Escriu només la reformulació en català, sense explicacions."""
                         "content": ans
                     }).execute()
 
-                    # Guardar també la resposta a memòria
                     save_memory(f"Entrenador: {ans[:300]}")
 
                 except Exception as e:
