@@ -6,3 +6,4 @@ sentence-transformers
 pytesseract
 Pillow
 openpyxl
+google-generativeai
