@@ -3,9 +3,10 @@ from database import get_db
 from openai import OpenAI
 from datetime import datetime
 import uuid
+import base64
 
 
-# --- EMBEDDINGS LOCALS (sense OpenAI) ---
+# --- EMBEDDINGS LOCALS ---
 @st.cache_resource
 def load_embedding_model():
     from sentence_transformers import SentenceTransformer
@@ -16,16 +17,38 @@ def get_embedding(text):
     emb = model.encode(text, normalize_embeddings=True)
     return emb.tolist()
 
-# --- OCR: LLEGIR TEXT DE IMATGES ---
-def extract_text_from_image(image_bytes):
+
+# --- OCR AMB VISION API (en comptes de pytesseract) ---
+def extract_text_from_image_vision(image_bytes, client):
     try:
-        import pytesseract
-        from PIL import Image
-        import io
-        img = Image.open(io.BytesIO(image_bytes))
-        text = pytesseract.image_to_string(img, lang='cat+spa+eng')
-        return text.strip() if text.strip() else None
+        b64 = base64.b64encode(image_bytes).decode("utf-8")
+        response = client.chat.completions.create(
+            model="qwen-vl-plus",  # model vision, canvia si el teu és diferent
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Extreu i transcriu TOT el text que veus en aquesta imatge. "
+                            "Inclou tots els números, valors, dates, etiquetes i unitats. "
+                            "Si és una captura d'una app esportiva (Garmin, Polar, Apple Health, etc.), "
+                            "extreu les mètriques: HRV, FC, VO2max, distància, ritme, etc. "
+                            "Respon NOMÉS amb el text extret, sense explicacions."
+                        )
+                    }
+                ]
+            }],
+            max_tokens=500
+        )
+        text = response.choices[0].message.content
+        return text.strip() if text and text.strip() else None
     except Exception as e:
+        st.warning(f"⚠️ Vision API error: {str(e)}")
         return None
 
 
@@ -42,6 +65,10 @@ def mostrar_xat():
         st.session_state.conv_id = None
     if 'msgs' not in st.session_state:
         st.session_state.msgs = []
+    if 'pending_ocr' not in st.session_state:
+        st.session_state.pending_ocr = None
+    if 'pending_image_url' not in st.session_state:
+        st.session_state.pending_image_url = None
 
     # --- GUARDAR MEMÒRIA ---
     def save_memory(content_text):
@@ -86,10 +113,12 @@ def mostrar_xat():
         "vell", "jove", "edat", "anys", "quants anys", "qui soc", "com estic",
         "lesió", "lesions", "menisc", "dolor", "cabell", "pes", "alçada",
         "objectiu", "hàbit", "cansament", "cansat", "fatigat", "son", "dormir",
-        "hores", "qualitat", "motivació", "sensació", "entrenament",
+        "hores", "qualitat", "motivació", "sensació", "entrenament", "hrv",
+        "freqüència", "cardíaca", "batecs", "pulsacions", "ritme", "vo2",
         "viejo", "joven", "edad", "años", "quién soy", "cómo estoy",
         "lesión", "pelo", "peso", "altura", "objetivo", "cansado", "horas",
-        "recordes", "recuerdas", "vas dir", "dijiste", "fa temps", "antes"
+        "recordes", "recuerdas", "vas dir", "dijiste", "fa temps", "antes",
+        "captura", "imatge", "foto", "screenshot"
     ]
 
     # --- CERCA RAG ---
@@ -99,14 +128,14 @@ def mostrar_xat():
             is_personal = any(kw in query_lower for kw in PERSONAL_KEYWORDS)
 
             if is_personal:
-                search_query = "edat anys lesions estat físic característiques personals objectius son hores fatiga motivació conversa anterior usuari"
+                search_query = "edat anys lesions estat físic característiques personals objectius son hores fatiga motivació HRV freqüència cardíaca entrenament dades"
             else:
                 try:
                     expanded = client.chat.completions.create(
                         model="qwen-turbo",
                         messages=[{
                             "role": "user",
-                            "content": f"""Reformula aquesta pregunta per buscar informació personal d'un usuari (edat, lesions, estat físic, objectius, hàbits, emocions, dades d'entrenament).
+                            "content": f"""Reformula aquesta pregunta per buscar informació personal d'un usuari (edat, lesions, estat físic, objectius, hàbits, emocions, dades d'entrenament, HRV, FC).
 Pregunta: {query_text}
 Escriu només la reformulació en català, sense explicacions."""
                         }],
@@ -174,6 +203,8 @@ Escriu només la reformulació en català, sense explicacions."""
             if st.button("Carregar"):
                 st.session_state.conv_id = opts[sel]
                 st.session_state.msgs = []
+                st.session_state.pending_ocr = None
+                st.session_state.pending_image_url = None
                 st.rerun()
         with col2:
             if st.button("🆕 Nova"):
@@ -184,24 +215,23 @@ Escriu només la reformulació en català, sense explicacions."""
                 }).execute()
                 st.session_state.conv_id = res.data[0]['id']
                 st.session_state.msgs = []
+                st.session_state.pending_ocr = None
+                st.session_state.pending_image_url = None
                 st.rerun()
 
     st.markdown("---")
 
-    if st.button("🧪 PROVAR MEMÒRIA MANUALMENT"):
-        test_facts = ["Tinc 30 anys", "El meu cabell és roig", "Vaig trencar el menisc fa un any"]
-        for f in test_facts:
-            save_memory(f)
-        st.info("Memòries de prova guardades! Pregunta 'Soc vell?' o 'Quants anys tinc?' per verificar.")
-
-    # --- ADJUNTS I INPUT ---
-    col1, col2, col3 = st.columns([4, 1, 1])
-    with col1:
-        prompt = st.chat_input("Pregunta...")
-    with col2:
-        uploaded_image = st.file_uploader("📷", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
-    with col3:
-        uploaded_file = st.file_uploader("📊", type=["csv", "xlsx", "xls"], label_visibility="collapsed")
+    # --- ADJUNTS ---
+    uploaded_image = st.file_uploader(
+        "📷 Adjunta captura (Garmin, HRV, etc.)",
+        type=["jpg", "jpeg", "png"],
+        label_visibility="visible"
+    )
+    uploaded_file = st.file_uploader(
+        "📊 Adjunta fitxer de dades",
+        type=["csv", "xlsx", "xls"],
+        label_visibility="visible"
+    )
 
     # Processar CSV/Excel
     if uploaded_file:
@@ -211,30 +241,34 @@ Escriu només la reformulació en català, sense explicacions."""
                 st.success(f"✅ Fitxer guardat a memòria ({len(df)} files)")
                 st.dataframe(df.head(5))
 
-    # Processar imatge amb OCR
-    ocr_context = None
+    # Processar imatge amb Vision API
     if uploaded_image:
+        img_bytes = uploaded_image.getvalue()
         st.image(uploaded_image, width=250)
-        with st.spinner("🔍 Llegint text de la imatge..."):
-            ocr_text = extract_text_from_image(uploaded_image.getvalue())
-            if ocr_text:
-                save_memory(f"IMATGE OCR: {ocr_text[:600]}")
-                st.success("✅ Text de la imatge guardat a memòria")
-                st.info(f"📄 Text detectat: {ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}")
-                ocr_context = ocr_text
-            else:
-                st.info("ℹ️ La imatge no conté text llegible — guardada sense OCR")
-                # Pujar igualment a storage per mostrar-la al chat
+
+        with st.spinner("🔍 Analitzant imatge amb IA..."):
+            ocr_text = extract_text_from_image_vision(img_bytes, client)
+
+        if ocr_text:
+            # Guardar a memòria immediatament
+            save_memory(f"DADES DE CAPTURA: {ocr_text[:800]}")
+            st.success("✅ Dades de la imatge guardades a memòria!")
+            st.info(f"📄 Text detectat: {ocr_text[:300]}{'...' if len(ocr_text) > 300 else ''}")
+            st.session_state.pending_ocr = ocr_text
+        else:
+            st.warning("⚠️ No s'ha pogut extreure text de la imatge")
+            st.session_state.pending_ocr = None
+
         # Pujar a storage
         try:
             ext = uploaded_image.name.split('.')[-1]
             fn = f"{user_id}/{st.session_state.conv_id}/{uuid.uuid4()}.{ext}"
-            supabase.storage.from_("chat-images").upload(fn, uploaded_image.getvalue())
-            pending_image_url = supabase.storage.from_("chat-images").get_public_url(fn)
+            supabase.storage.from_("chat-images").upload(fn, img_bytes)
+            st.session_state.pending_image_url = supabase.storage.from_("chat-images").get_public_url(fn)
         except Exception:
-            pending_image_url = None
-    else:
-        pending_image_url = None
+            st.session_state.pending_image_url = None
+
+    st.markdown("---")
 
     # Mostrar historial
     for m in st.session_state.msgs:
@@ -243,16 +277,28 @@ Escriu només la reformulació en català, sense explicacions."""
                 st.image(m["image_url"], width=300)
             st.markdown(m["content"])
 
-    # --- PROCESSAMENT DEL MISSATGE ---
-    if prompt:
-        image_url = pending_image_url
+    # --- INPUT I PROCESSAMENT ---
+    prompt = st.chat_input("Pregunta...")
 
-        # Afegir context OCR al prompt si n'hi ha
+    if prompt:
+        ocr_context = st.session_state.pending_ocr
+        image_url = st.session_state.pending_image_url
+
+        # Prompt enriquit amb OCR si n'hi ha
         prompt_with_ocr = prompt
         if ocr_context:
-            prompt_with_ocr = f"{prompt}\n\n[Text de la imatge adjunta: {ocr_context[:400]}]"
+            prompt_with_ocr = (
+                f"{prompt}\n\n"
+                f"[Dades extretes de la imatge adjunta:\n{ocr_context[:600]}]"
+            )
 
-        # Guardar missatge a SQL
+        # Mostrar missatge usuari
+        with st.chat_message("user"):
+            if image_url:
+                st.image(image_url, width=300)
+            st.markdown(prompt)
+
+        # Guardar a BD
         st.session_state.msgs.append({"role": "user", "content": prompt, "image_url": image_url})
         supabase.table("messages").insert({
             "conversation_id": st.session_state.conv_id,
@@ -261,12 +307,16 @@ Escriu només la reformulació en català, sense explicacions."""
             "image_url": image_url
         }).execute()
 
-        # Guardar sempre a memòria llarg termini
+        # Guardar prompt a memòria
         save_memory(prompt)
+
+        # Netejar pending
+        st.session_state.pending_ocr = None
+        st.session_state.pending_image_url = None
 
         with st.chat_message("assistant"):
             with st.spinner("Consultant memòria i pensant..."):
-                memories = get_relevant_memories(prompt, limit=6)
+                memories = get_relevant_memories(prompt_with_ocr, limit=8)
 
                 if memories:
                     context = "HISTORIAL DE L'USUARI (amb dates):\n" + "\n".join([f"- {m}" for m in memories])
@@ -280,13 +330,18 @@ Escriu només la reformulació en català, sense explicacions."""
                         f"Tens accés a l'historial complet de l'usuari:\n\n{context}\n\n"
                         "INSTRUCCIONS IMPORTANTS:\n"
                         "1. Si l'historial conté dades rellevants per a la pregunta, utilitza-les SEMPRE.\n"
-                        "2. Si hi ha dates, raona temporalment (p.ex. 'fa 3 mesos deies que...').\n"
-                        "3. Si l'usuari et diu alguna dada personal (edat, pes, lesió...), confirma que ho has registrat.\n"
-                        "4. Respon sempre en català."
+                        "2. Si hi ha captures d'apps esportives (HRV, FC, VO2max, etc.), analitza-les i comenta-les.\n"
+                        "3. Si hi ha dates, raona temporalment (p.ex. 'fa 3 mesos deies que...').\n"
+                        "4. Si l'usuari et diu alguna dada personal (edat, pes, lesió...), confirma que ho has registrat.\n"
+                        "5. Respon sempre en català."
                     )
                 }
+
                 history = [sys_msg] + [
-                    {"role": m["role"], "content": m["content"] if m["content"] != prompt else prompt_with_ocr}
+                    {
+                        "role": m["role"],
+                        "content": m["content"] if m["content"] != prompt else prompt_with_ocr
+                    }
                     for m in st.session_state.msgs[-8:]
                 ]
 
