@@ -3,10 +3,6 @@ from database import get_db
 from openai import OpenAI
 from datetime import datetime
 import uuid
-import base64
-import google.generativeai as genai
-from PIL import Image
-import io
 
 
 # --- EMBEDDINGS LOCALS ---
@@ -21,26 +17,16 @@ def get_embedding(text):
     return emb.tolist()
 
 
-# --- OCR AMB GEMINI VISION ---
-def extract_text_from_image_vision(image_bytes):
+# --- OCR AMB PYTESSERACT ---
+def extract_text_from_image(image_bytes):
     try:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        import pytesseract
+        from PIL import Image
+        import io
         img = Image.open(io.BytesIO(image_bytes))
-        response = model.generate_content([
-            img,
-            (
-                "Extreu i transcriu TOT el text que veus en aquesta imatge. "
-                "Inclou tots els números, valors, dates, etiquetes i unitats. "
-                "Si és una captura d'una app esportiva (Garmin, Polar, Apple Health, Wahoo, etc.), "
-                "extreu les mètriques: HRV, FC, VO2max, distància, ritme, calories, son, etc. "
-                "Respon NOMÉS amb el text extret, sense explicacions."
-            )
-        ])
-        text = response.text
+        text = pytesseract.image_to_string(img, lang='cat+spa+eng')
         return text.strip() if text and text.strip() else None
     except Exception as e:
-        st.warning(f"⚠️ Gemini Vision error: {str(e)}")
         return None
 
 
@@ -127,7 +113,7 @@ def mostrar_xat():
                         model="qwen-turbo",
                         messages=[{
                             "role": "user",
-                            "content": f"""Reformula aquesta pregunta per buscar informació personal d'un usuari (edat, lesions, estat físic, objectius, hàbits, emocions, dades d'entrenament, HRV, FC).
+                            "content": f"""Reformula aquesta pregunta per buscar informació personal d'un usuari (edat, lesions, estat físic, objectius, hàbits, emocions, dades d'entrenament).
 Pregunta: {query_text}
 Escriu només la reformulació en català, sense explicacions."""
                         }],
@@ -233,16 +219,15 @@ Escriu només la reformulació en català, sense explicacions."""
                 st.success(f"✅ Fitxer guardat a memòria ({len(df)} files)")
                 st.dataframe(df.head(5))
 
-    # Processar imatge amb Vision API
+    # Processar imatge amb OCR
     if uploaded_image:
         img_bytes = uploaded_image.getvalue()
         st.image(uploaded_image, width=250)
 
-        with st.spinner("🔍 Analitzant imatge amb IA..."):
-            ocr_text = extract_text_from_image_vision(img_bytes)
+        with st.spinner("🔍 Llegint text de la imatge..."):
+            ocr_text = extract_text_from_image(img_bytes)
 
         if ocr_text:
-            # Guardar a memòria immediatament
             save_memory(f"DADES DE CAPTURA: {ocr_text[:800]}")
             st.success("✅ Dades de la imatge guardades a memòria!")
             st.info(f"📄 Text detectat: {ocr_text[:300]}{'...' if len(ocr_text) > 300 else ''}")
