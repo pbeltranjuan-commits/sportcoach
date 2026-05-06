@@ -7,6 +7,7 @@ try:
     import xats
     import Sensacions
     import agents
+    import prediccions
 except Exception as e:
     st.error(f"❌ Error carregant mòduls: {e}")
     st.stop()
@@ -71,7 +72,7 @@ else:
 
     menu = st.sidebar.radio(
         "Navegació",
-        ["🏠 Inici", "💬 Xat IA", "🤖 Agents", "💭 Sensacions"],
+        ["🏠 Inici", "💬 Xat IA", "🤖 Agents", "💭 Sensacions", "📊 Prediccions"],
         index=0
     )
 
@@ -101,5 +102,13 @@ else:
             Sensacions.mostrar_sensacions()
         except Exception as e:
             st.error(f"❌ Error a sensacions: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
+    elif menu == "📊 Prediccions":
+        try:
+            prediccions.mostrar_prediccions()
+        except Exception as e:
+            st.error(f"❌ Error a prediccions: {e}")
             import traceback
             st.code(traceback.format_exc())
