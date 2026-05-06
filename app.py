@@ -8,6 +8,7 @@ try:
     import Sensacions
     import agents
     import prediccions
+    import models
 except Exception as e:
     st.error(f"❌ Error carregant mòduls: {e}")
     st.stop()
@@ -22,12 +23,10 @@ if st.session_state.user is None:
     st.caption("Esports amb Intel·ligència Artificial")
 
     tab1, tab2 = st.tabs(["🔑 Iniciar Sessió", "📝 Registrar-se"])
-
     with tab1:
         st.subheader("Benvingut de nou")
         email = st.text_input("Email", key="login_email")
         password = st.text_input("Contrasenya", type="password", key="login_password")
-
         if st.button("Entrar", type="primary"):
             user, error = login(email, password)
             if user:
@@ -43,7 +42,6 @@ if st.session_state.user is None:
         new_email = st.text_input("Email", key="signup_email")
         new_password = st.text_input("Contrasenya", type="password", key="signup_password")
         new_name = st.text_input("Nom complet", key="signup_name")
-
         if st.button("Registrar-se", type="primary"):
             user, error = signup(new_email, new_password, new_name)
             if user:
@@ -72,7 +70,7 @@ else:
 
     menu = st.sidebar.radio(
         "Navegació",
-        ["🏠 Inici", "💬 Xat IA", "🤖 Agents", "💭 Sensacions", "📊 Prediccions"],
+        ["🏠 Inici", "💬 Xat IA", "🤖 Agents", "💭 Sensacions", "📊 Prediccions", "🧬 Models"],
         index=0
     )
 
@@ -110,5 +108,13 @@ else:
             prediccions.mostrar_prediccions()
         except Exception as e:
             st.error(f"❌ Error a prediccions: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
+    elif menu == "🧬 Models":
+        try:
+            models.mostrar_models()
+        except Exception as e:
+            st.error(f"❌ Error als models: {e}")
             import traceback
             st.code(traceback.format_exc())
