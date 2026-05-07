@@ -1,11 +1,5 @@
 """
 strava_sync.py  –  Pàgina Streamlit "🚴 Strava" per a SportCoach IA
-
-Funcions:
-  1. Connexió / desconnexió OAuth amb Strava
-  2. Sincronització d'activitats a Supabase (strava_activities)
-  3. Injecció automàtica a long_term_memories (RAG)
-  4. Visualització ràpida d'activitats i estadístiques
 """
 
 from __future__ import annotations
@@ -39,11 +33,15 @@ from strava_db import (
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Helpers de sessió i token
+# Helpers de sessió i token (CORREGIT)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _user_id() -> str:
-    return st.session_state.get("user_id", "anonymous")
+def _user_id() -> Optional[str]:
+    """Retorna l'UUID de l'usuari loguejat o None."""
+    user = st.session_state.get("user")
+    if user and hasattr(user, 'id'):
+        return str(user.id)
+    return None
 
 
 def _get_valid_token() -> Optional[str]:
@@ -51,9 +49,13 @@ def _get_valid_token() -> Optional[str]:
     Retorna un access_token vàlid.
     Ordre: session_state → DB → refresh si caducat → None.
     """
+    user_id = _user_id()
+    if not user_id:
+        return None
+        
     tok = st.session_state.get("strava_token")
     if not tok:
-        tok = get_token(_user_id())
+        tok = get_token(user_id)
         if tok:
             st.session_state["strava_token"] = tok
 
@@ -64,7 +66,7 @@ def _get_valid_token() -> Optional[str]:
     if datetime.utcnow().timestamp() > tok.get("expires_at", 0) - 300:
         try:
             new_tok = api_refresh_token(tok["refresh_token"])
-            update_token(_user_id(), new_tok)
+            update_token(user_id, new_tok)
             st.session_state["strava_token"] = {**tok, **new_tok}
             return new_tok["access_token"]
         except Exception as e:
@@ -75,7 +77,9 @@ def _get_valid_token() -> Optional[str]:
 
 
 def _disconnect():
-    delete_token(_user_id())
+    user_id = _user_id()
+    if user_id:
+        delete_token(user_id)
     st.session_state.pop("strava_token", None)
     st.session_state.pop("strava_athlete", None)
     st.success("Compte de Strava desconnectat.")
@@ -88,6 +92,11 @@ def _disconnect():
 
 def _handle_oauth_callback():
     """Si la URL conté ?code=..., intercanvia el codi i guarda el token + atleta."""
+    user_id = _user_id()
+    if not user_id:
+        st.error("❌ Has d'iniciar sessió per connectar Strava")
+        return
+        
     params = st.query_params
     code  = params.get("code")
     error = params.get("error")
@@ -109,7 +118,7 @@ def _handle_oauth_callback():
             if not athlete.get("id"):
                 athlete = get_athlete(token_data["access_token"])
 
-            save_token(_user_id(), token_data, athlete)
+            save_token(user_id, token_data, athlete)
             st.session_state["strava_token"]  = token_data
             st.session_state["strava_athlete"] = athlete
             st.query_params.clear()
@@ -336,6 +345,11 @@ def _section_activities():
 
 def show():
     st.title("🚴 Strava")
+
+    # Verificar que hi ha usuari loguejat
+    if _user_id() is None:
+        st.error("🔒 Has d'iniciar sessió per utilitzar Strava")
+        return
 
     _handle_oauth_callback()
 
