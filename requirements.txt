@@ -1,5 +1,5 @@
-rich==13.7.0
-streamlit==1.29.0
+rich>=13.7.0,<15.0.0
+streamlit==1.28.0
 openai==1.12.0
 supabase==2.3.0
 pandas==2.0.3
