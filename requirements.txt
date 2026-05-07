@@ -9,4 +9,8 @@ openpyxl
 google-generativeai
 opencv-python-headless==4.8.1.78
 numpy==1.24.3
-requests
+requests==2.31.0
+rich==13.7.0
+markdown-it-py==2.2.0
+pygments==2.17.2
+mdurl==0.1.2
