@@ -7,3 +7,6 @@ pytesseract
 Pillow
 openpyxl
 google-generativeai
+opencv-python-headless
+numpy
+requests
