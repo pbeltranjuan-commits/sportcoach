@@ -1,16 +1,30 @@
+"""
+agents.py – Sistema multi-agent per a SportCoach IA
+
+Agents disponibles:
+  - 🏃 Entrenador: Plans d'entrenament i rendiment
+  - 🥗 Nutricionista: Dieta i alimentació esportiva
+  - 🧠 Psicòleg: Motivació i benestar mental
+  - 📊 Analista: Dades, tendències i pronòstics
+"""
+
 import streamlit as st
 from database import get_db
 from openai import OpenAI
 from datetime import datetime
 import uuid
 
+
 # --- EMBEDDINGS LOCALS ---
 @st.cache_resource
 def load_embedding_model():
+    """Carrega el model d'embeddings un sol cop."""
     from sentence_transformers import SentenceTransformer
     return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
+
 def get_embedding(text):
+    """Genera embedding normalitzat per a cerca vectorial."""
     model = load_embedding_model()
     emb = model.encode(text, normalize_embeddings=True)
     return emb.tolist()
@@ -79,6 +93,7 @@ AGENTS = {
 
 
 def mostrar_xat():
+    """Funció principal del mòdul d'agents."""
     if 'user' not in st.session_state or st.session_state.user is None:
         st.warning("🔒 Has d'iniciar sessió")
         return
@@ -97,6 +112,7 @@ def mostrar_xat():
 
     # --- HELPERS ---
     def save_memory(content_text):
+        """Guarda contingut a long_term_memories amb embedding."""
         try:
             dated = f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {content_text}"
             emb = get_embedding(dated)
@@ -104,10 +120,10 @@ def mostrar_xat():
                 "user_id": user_id, "content": dated, "embedding": emb
             }).execute()
         except Exception:
-            pass  # Silenciem errors de memòria per no tallar el flux
+            pass  # Silenciem errors per no tallar el flux
 
     def get_relevant_memories(query_text, limit=8):
-        """Cerca memòria amb fallback segur (vectorial → cronològic)"""
+        """Cerca memòria amb fallback segur (vectorial → cronològic)."""
         try:
             query_emb = get_embedding(query_text)
             res = supabase.rpc("match_memories", {
@@ -131,6 +147,7 @@ def mostrar_xat():
             return []
 
     def get_sensacions_context():
+        """Obté les últimes sensacions de training_sensations."""
         try:
             res = supabase.table("training_sensations") \
                 .select("*") \
@@ -138,7 +155,8 @@ def mostrar_xat():
                 .order("date", desc=True) \
                 .limit(10) \
                 .execute()
-            if not res.data: return ""
+            if not res.data:
+                return ""
             lines = ["📋 DADES DE SENSACIONS RECENTS:"]
             for s in res.data:
                 lines.append(
@@ -153,7 +171,7 @@ def mostrar_xat():
             return ""
 
     def load_agent_messages(conv_id):
-        """Carrega missatges reals des de Supabase per persistència"""
+        """Carrega missatges reals des de Supabase per persistència."""
         try:
             res = supabase.table("messages").select("*").eq(
                 "conversation_id", conv_id
@@ -163,6 +181,7 @@ def mostrar_xat():
             return []
 
     def get_or_create_conv(agent_id):
+        """Obté o crea una conversa per a un agent específic."""
         if agent_id not in st.session_state.agent_conv_ids:
             res = supabase.table("conversations").insert({
                 "user_id": user_id,
@@ -252,7 +271,7 @@ def mostrar_xat():
                 if sensacions:
                     context_parts.append(sensacions)
 
-                context = "\n\n".join(context_parts) if context_parts else "⚠️ No hi ha dades prèvies disponibles."
+                context = "\n".join(context_parts) if context_parts else "⚠️ No hi ha dades prèvies disponibles."
 
                 # 3. System Prompt + Context
                 sys_msg = {
