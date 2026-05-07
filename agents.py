@@ -1,11 +1,7 @@
 """
-agents.py – Sistema multi-agent per a SportCoach IA
-
-Agents disponibles:
-  - 🏃 Entrenador: Plans d'entrenament i rendiment
-  - 🥗 Nutricionista: Dieta i alimentació esportiva
-  - 🧠 Psicòleg: Motivació i benestar mental
-  - 📊 Analista: Dades, tendències i pronòstics
+agents.py – Mòdul de Agents IA per a SportCoach
+Integra: Entrenador, Nutricionista, Psicòleg i Analista.
+Llegeix dades de: Long Term Memory (Strava, Chat) i Training Sensations.
 """
 
 import streamlit as st
@@ -14,17 +10,13 @@ from openai import OpenAI
 from datetime import datetime
 import uuid
 
-
 # --- EMBEDDINGS LOCALS ---
 @st.cache_resource
 def load_embedding_model():
-    """Carrega el model d'embeddings un sol cop."""
     from sentence_transformers import SentenceTransformer
     return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
-
 def get_embedding(text):
-    """Genera embedding normalitzat per a cerca vectorial."""
     model = load_embedding_model()
     emb = model.encode(text, normalize_embeddings=True)
     return emb.tolist()
@@ -36,13 +28,13 @@ AGENTS = {
         "id": "entrenador",
         "emoji": "🏃",
         "color": "#FF4B4B",
-        "descripció": "Planifica entrenos, ritmes i pronòstics de rendiment",
+        "descripció": "Planifica entrenos i fa pronòstics de rendiment",
         "system_prompt": (
             "Ets un entrenador personal expert en running i atletisme. "
             "El teu rol és planificar entrenaments personalitzats, analitzar el rendiment, "
             "fer pronòstics de temps i marques, i ajustar la càrrega d'entrenament. "
             "Utilitza les dades de l'historial per adaptar els plans. "
-            "Sempre proposa entrenaments concrets amb distàncies, ritmes i dies. "
+            "Sempre proposa entrenamens concrets amb distàncies, ritmes i dies. "
             "Respon en català."
         )
     },
@@ -92,8 +84,7 @@ AGENTS = {
 }
 
 
-def mostrar_xat():
-    """Funció principal del mòdul d'agents."""
+def mostrar_agents():
     if 'user' not in st.session_state or st.session_state.user is None:
         st.warning("🔒 Has d'iniciar sessió")
         return
@@ -102,52 +93,56 @@ def mostrar_xat():
     client = OpenAI(api_key=st.secrets["AKI_API_KEY"], base_url=st.secrets["AKI_BASE_URL"])
     user_id = st.session_state.user.id
 
-    # --- INICIALITZACIÓ D'ESTAT ---
+    # Inicialitzar estat
     if 'agent_seleccionat' not in st.session_state:
         st.session_state.agent_seleccionat = "🏃 Entrenador"
-    if 'agent_conv_ids' not in st.session_state:
-        st.session_state.agent_conv_ids = {}
     if 'agent_msgs' not in st.session_state:
         st.session_state.agent_msgs = {}
+    if 'agent_conv_ids' not in st.session_state:
+        st.session_state.agent_conv_ids = {}
 
-    # --- HELPERS ---
+    # --- GUARDAR MEMÒRIA (compartida entre agents) ---
     def save_memory(content_text):
-        """Guarda contingut a long_term_memories amb embedding."""
         try:
-            dated = f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {content_text}"
-            emb = get_embedding(dated)
+            dated_content = f"[{datetime.now().strftime('%Y-%m-%d')}] {content_text}"
+            emb = get_embedding(dated_content)
             supabase.table("long_term_memories").insert({
-                "user_id": user_id, "content": dated, "embedding": emb
+                "user_id": user_id,
+                "content": dated_content,
+                "embedding": emb
             }).execute()
-        except Exception:
-            pass  # Silenciem errors per no tallar el flux
+            return True
+        except Exception as e:
+            return False
 
-    def get_relevant_memories(query_text, limit=8):
-        """Cerca memòria amb fallback segur (vectorial → cronològic)."""
+    # --- CERCA RAG (compartida entre agents) ---
+    def get_relevant_memories(query_text, limit=6):
+        """Cerca a long_term_memories (aquí és on Strava guarda les seves dades)"""
         try:
             query_emb = get_embedding(query_text)
+            # Intentem fer la cerca vectorial
             res = supabase.rpc("match_memories", {
                 "query_embedding": query_emb,
-                "match_threshold": 0.1,  # Baixa per maximitzar troballes
+                "match_threshold": 0.1, # Baixa per assegurar troballes
                 "match_count": limit,
                 "p_user_id": user_id
             }).execute()
             if res.data:
                 return [row["content"] for row in res.data]
+            return []
         except Exception:
-            pass
-        
-        # Fallback: agafa les últimes memòries guardades
-        try:
-            res = supabase.table("long_term_memories").select("*").eq(
-                "user_id", user_id
-            ).order("created_at", desc=True).limit(limit).execute()
-            return [row["content"] for row in res.data] if res.data else []
-        except Exception:
+            # Si falla, retornem les últimes memòries sense filtrar
+            try:
+                res = supabase.table("long_term_memories").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+                if res.data:
+                    return [row["content"] for row in res.data]
+            except Exception:
+                return []
             return []
 
+    # --- OBTENIR DADES DE SENSACIONS ---
     def get_sensacions_context():
-        """Obté les últimes sensacions de training_sensations."""
+        """Llegeix directament de la taula training_sensations"""
         try:
             res = supabase.table("training_sensations") \
                 .select("*") \
@@ -157,50 +152,37 @@ def mostrar_xat():
                 .execute()
             if not res.data:
                 return ""
-            lines = ["📋 DADES DE SENSACIONS RECENTS:"]
+            lines = ["DADES DE SENSACIONS RECENTS:"]
             for s in res.data:
                 lines.append(
                     f"- {s['date']}: fatiga {s.get('fatigue_level','?')}/10, "
                     f"motivació {s.get('motivation','?')}/10, "
                     f"son {s.get('sleep_hours','?')}h (qualitat {s.get('sleep_quality','?')}/10), "
                     f"entrenament {s.get('training_quality','?')}/10"
-                    + (f" | Notes: {s['notes']}" if s.get('notes') else "")
+                    + (f", notes: {s['notes']}" if s.get('notes') else "")
                 )
             return "\n".join(lines)
         except Exception:
             return ""
 
-    def load_agent_messages(conv_id):
-        """Carrega missatges reals des de Supabase per persistència."""
-        try:
-            res = supabase.table("messages").select("*").eq(
-                "conversation_id", conv_id
-            ).order("created_at").execute()
-            return res.data if res.data else []
-        except Exception:
-            return []
-
+    # --- INICIALITZAR CONVERSA PER AGENT ---
     def get_or_create_conv(agent_id):
-        """Obté o crea una conversa per a un agent específic."""
         if agent_id not in st.session_state.agent_conv_ids:
             res = supabase.table("conversations").insert({
                 "user_id": user_id,
-                "title": f"Agent - {agent_id.capitalize()}",
+                "title": f"Agent {agent_id}",
                 "updated_at": datetime.now().isoformat()
             }).execute()
             st.session_state.agent_conv_ids[agent_id] = res.data[0]['id']
         
-        conv_id = st.session_state.agent_conv_ids[agent_id]
-        
-        # Carrega missatges si no estan a session_state
-        if agent_id not in st.session_state.agent_msgs or not st.session_state.agent_msgs[agent_id]:
-            st.session_state.agent_msgs[agent_id] = load_agent_messages(conv_id)
+        if agent_id not in st.session_state.agent_msgs:
+            st.session_state.agent_msgs[agent_id] = []
             
-        return conv_id
+        return st.session_state.agent_conv_ids[agent_id]
 
-    # --- INTERFÍCIE PRINCIPAL ---
-    st.title("🤖 Agents IA Especialitzats")
-    st.caption("Tria l'expert. Tots comparteixen la teva memòria i dades de Strava/Sensacions.")
+    # --- INTERFÍCIE ---
+    st.title("🤖 Agents IA")
+    st.caption("Experts especialitzats que comparteixen la teva memòria i dades de Strava")
 
     # Selector d'agents
     cols = st.columns(4)
@@ -208,7 +190,7 @@ def mostrar_xat():
         with cols[i]:
             is_selected = st.session_state.agent_seleccionat == nom
             if st.button(
-                f"{agent['emoji']} {nom.split(' ', 1)[1]}",
+                f"{agent['emoji']}\n**{nom.split(' ', 1)[1]}**",
                 use_container_width=True,
                 type="primary" if is_selected else "secondary"
             ):
@@ -224,17 +206,17 @@ def mostrar_xat():
     conv_id = get_or_create_conv(agent_id)
     msgs = st.session_state.agent_msgs[agent_id]
 
-    # Capçalera agent
-    col_info, col_new = st.columns([5, 1])
-    with col_info:
-        st.markdown(f"### {agent_nom}")
-        st.caption(agent["descripció"])
-    with col_new:
-        if st.button("🆕 Nova conversa", use_container_width=True):
-            # Crea nova conversa i neteja estat
+    # Info de l'agent
+    st.markdown(f"### {agent_nom}")
+    st.caption(agent["descripció"])
+
+    # Botó nova conversa
+    col1, col2 = st.columns([5, 1])
+    with col2:
+        if st.button("🆕 Nova", use_container_width=True):
             res = supabase.table("conversations").insert({
                 "user_id": user_id,
-                "title": f"Agent {agent_id} (Nova)",
+                "title": f"Agent {agent_id}",
                 "updated_at": datetime.now().isoformat()
             }).execute()
             st.session_state.agent_conv_ids[agent_id] = res.data[0]['id']
@@ -249,58 +231,64 @@ def mostrar_xat():
             st.markdown(m["content"])
 
     # Input
-    prompt = st.chat_input(f"Escriu a {agent_nom}...")
+    prompt = st.chat_input(f"Parla amb {agent_nom}...")
 
     if prompt:
-        # 1. Guardar missatge usuari
         msgs.append({"role": "user", "content": prompt})
         supabase.table("messages").insert({
-            "conversation_id": conv_id, "role": "user", "content": prompt
+            "conversation_id": conv_id,
+            "role": "user",
+            "content": prompt
         }).execute()
-        save_memory(f"Usuari: {prompt}")
+
+        save_memory(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner(f"{agent['emoji']} Consultat dades i pensant..."):
-                # 2. Construir context
-                memories = get_relevant_memories(prompt, limit=8)
+            with st.spinner(f"{agent['emoji']} Pensant..."):
+                # Context: memòria RAG (Strava inclos) + sensacions
+                memories = get_relevant_memories(prompt, limit=6)
                 sensacions = get_sensacions_context()
 
                 context_parts = []
                 if memories:
-                    context_parts.append("🧠 HISTORIAL I DADES GUARDADES:\n" + "\n".join([f"- {m}" for m in memories]))
+                    context_parts.append(
+                        "HISTORIAL DE L'USUARI (incloent Strava):\n" + "\n".join([f"- {m}" for m in memories])
+                    )
                 if sensacions:
                     context_parts.append(sensacions)
 
-                context = "\n".join(context_parts) if context_parts else "⚠️ No hi ha dades prèvies disponibles."
+                context = "\n\n".join(context_parts) if context_parts else "No hi ha historial previ."
 
-                # 3. System Prompt + Context
                 sys_msg = {
                     "role": "system",
-                    "content": f"{agent['system_prompt']}\n\n📥 CONTEXTE DISPONIBLE:\n{context}"
+                    "content": (
+                        f"{agent['system_prompt']}\n\n"
+                        f"CONTEXT DE L'USUARI:\n{context}"
+                    )
                 }
 
-                # 4. Historial recent (últims 10 missatges d'aquesta conversa)
-                recent_history = [
+                history = [sys_msg] + [
                     {"role": m["role"], "content": m["content"]}
-                    for m in msgs[-10:]
+                    for m in msgs[-8:]
                 ]
 
-                # 5. Crida a la IA
                 try:
                     res = client.chat.completions.create(
                         model="qwen-turbo",
-                        messages=[sys_msg] + recent_history,
-                        temperature=0.6
+                        messages=history,
+                        temperature=0.7
                     )
                     ans = res.choices[0].message.content
                     st.markdown(ans)
 
-                    # 6. Guardar resposta
                     msgs.append({"role": "assistant", "content": ans})
                     supabase.table("messages").insert({
-                        "conversation_id": conv_id, "role": "assistant", "content": ans
+                        "conversation_id": conv_id,
+                        "role": "assistant",
+                        "content": ans
                     }).execute()
-                    save_memory(f"Resposta {agent_nom}: {ans[:150]}...")
+
+                    save_memory(f"Agent {agent_nom}: {ans[:200]}")
 
                 except Exception as e:
-                    st.error(f"❌ Error en la resposta de la IA: {str(e)}")
+                    st.error(f"❌ ERROR: {str(e)}")
