@@ -9,6 +9,7 @@ try:
     import agents
     import prediccions
     import models
+    import strava_sync  # ✅ NOU: Import del mòdul Strava
 except Exception as e:
     st.error(f"❌ Error carregant mòduls: {e}")
     st.stop()
@@ -68,9 +69,10 @@ else:
 
     st.sidebar.markdown("---")
 
+    # ✅ NOU: Afegit "🚴 Strava" al menú
     menu = st.sidebar.radio(
         "Navegació",
-        ["🏠 Inici", "💬 Xat IA", "🤖 Agents", "💭 Sensacions", "📊 Prediccions", "🧬 Models"],
+        ["🏠 Inici", "💬 Xat IA", "🚴 Strava", "🤖 Agents", "💭 Sensacions", "📊 Prediccions", "🧬 Models"],
         index=0
     )
 
@@ -84,6 +86,15 @@ else:
             xats.mostrar_xat()
         except Exception as e:
             st.error(f"❌ Error al xat: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
+    # ✅ NOU: Pàgina de Strava
+    elif menu == "🚴 Strava":
+        try:
+            strava_sync.show()  # Crida la funció principal del mòdul Strava
+        except Exception as e:
+            st.error(f"❌ Error a Strava: {e}")
             import traceback
             st.code(traceback.format_exc())
 
