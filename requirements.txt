@@ -7,3 +7,4 @@ pytesseract
 Pillow
 openpyxl
 opencv-python==4.8.1.78
+# actualitzacio 1
